@@ -208,6 +208,18 @@ button:disabled {
   color: #ffb5bd;
 }
 
+.secondary.copy-logs {
+  background: #1e222b;
+  color: #9da5b4;
+  border: 1px solid #313642;
+}
+
+.secondary.copy-logs.copied {
+  background: #1d3326;
+  color: #7ce8a3;
+  border-color: #2b553c;
+}
+
 .footnote {
   margin: 13px 2px 0;
 }

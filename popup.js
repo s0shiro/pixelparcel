@@ -16,10 +16,12 @@ const controls = {
   download1080: document.querySelector("#download-1080-button"),
   retry: document.querySelector("#retry-button"),
   stop: document.querySelector("#stop-button"),
+  copyLogs: document.querySelector("#copy-logs-button"),
 };
 
 let flowTab = null;
 let refreshing = false;
+let lastState = null;
 
 async function getFlowTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -37,6 +39,7 @@ async function send(message) {
 }
 
 function render(state) {
+  lastState = state;
   const running = Boolean(state?.running);
   const found = Number(state?.found || 0);
   const processed = Number(state?.processed || 0);
@@ -121,6 +124,100 @@ controls.download720.addEventListener("click", () => issue({ type: "FLOW_START_B
 controls.download1080.addEventListener("click", () => issue({ type: "FLOW_START_BATCH", quality: "1080p" }));
 controls.retry.addEventListener("click", () => issue({ type: "FLOW_RETRY_FAILURES" }));
 controls.stop.addEventListener("click", () => issue({ type: "FLOW_STOP_BATCH" }));
+
+function formatLogs(state) {
+  const timestamp = new Date().toISOString();
+  const localTime = new Date().toLocaleString();
+  const lines = [
+    "=== FLOW BULK VIDEO EXPORTER LOGS ===",
+    `Generated at: ${timestamp} (${localTime})`,
+  ];
+
+  if (!state) {
+    lines.push("Status: Not connected to a Flow project tab.");
+    return lines.join("\n");
+  }
+
+  lines.push(`Mode: ${state.mode || "Idle"}`);
+  lines.push(`Message: ${state.message || "Ready"}`);
+  lines.push(`Quality: ${state.quality || state.lastQuality || "N/A"}`);
+  lines.push(`Stats: ${state.found || 0} found | ${state.success || 0} downloaded | ${state.failed || 0} failed`);
+
+  if (state.lastError) {
+    lines.push(`Last error: ${state.lastError}`);
+  }
+
+  const failures = Array.isArray(state.failures) ? state.failures : [];
+  if (failures.length > 0) {
+    lines.push("");
+    lines.push(`--- FAILED VIDEOS (${failures.length}) ---`);
+    for (const failure of failures) {
+      lines.push(`#${failure.index} — ${failure.title || failure.mediaId || "Unknown"}: ${failure.error}`);
+    }
+  }
+
+  const logs = Array.isArray(state.logs) ? state.logs : [];
+  lines.push("");
+  lines.push(`--- ACTIVITY LOGS (${logs.length} entries) ---`);
+  if (logs.length > 0) {
+    lines.push(...logs);
+  } else {
+    lines.push("(No activity logs recorded yet. Start a scan or download to generate logs.)");
+  }
+
+  return lines.join("\n");
+}
+
+async function copyToClipboard(text) {
+  if (typeof navigator !== "undefined" && navigator?.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to DOM fallback
+    }
+  }
+  if (typeof document !== "undefined" && document.body?.appendChild) {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+      return true;
+    } catch {
+      // Failed
+    }
+  }
+  return false;
+}
+
+controls.copyLogs?.addEventListener("click", async () => {
+  let state = lastState;
+  try {
+    if (flowTab?.id) {
+      const live = await send({ type: "FLOW_GET_STATUS" });
+      if (live && typeof live.running === "boolean") state = live;
+    }
+  } catch {
+    // Retain lastState if live fetch fails
+  }
+
+  const text = formatLogs(state);
+  await copyToClipboard(text);
+  const btn = controls.copyLogs;
+  if (!btn) return;
+  const originalText = btn.textContent;
+  btn.textContent = "✓ Logs copied!";
+  btn.classList.add("copied");
+  setTimeout(() => {
+    btn.textContent = originalText;
+    btn.classList.remove("copied");
+  }, 2500);
+});
 
 (async function initialize() {
   render(null);
