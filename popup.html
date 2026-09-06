@@ -20,9 +20,15 @@
         <div class="progress-track" aria-hidden="true">
           <div id="progress-bar" class="progress-bar"></div>
         </div>
+        <div id="timing-row" class="timing-row">
+          <span>Elapsed: <strong id="elapsed-time">00:00</strong></span>
+          <span>Speed: <strong id="speed-stat">--</strong></span>
+          <span>ETA: <strong id="eta-time">--:--</strong></span>
+        </div>
         <div class="counts">
           <span><strong id="found-count">0</strong> found</span>
           <span><strong id="success-count">0</strong> downloaded</span>
+          <span id="skipped-wrapper" hidden><strong id="skipped-count">0</strong> skipped</span>
           <span><strong id="failed-count">0</strong> failed</span>
         </div>
         <p id="last-error" class="last-error" hidden></p>
@@ -32,6 +38,14 @@
         </div>
       </section>
 
+      <div class="filter-section">
+        <div class="filter-row">
+          <input id="filter-input" class="filter-input" type="text" placeholder="Filter by title (e.g. EP02) or range (1-10)…" autocomplete="off" spellcheck="false">
+          <button id="filter-clear" class="clear-btn" type="button" title="Clear filter" hidden>×</button>
+        </div>
+        <div id="filter-status" class="filter-status" hidden></div>
+      </div>
+
       <div class="actions">
         <button id="scan-button" class="secondary" type="button">Scan project</button>
         <button id="download-720-button" class="primary" type="button">Download all 720p</button>
@@ -40,6 +54,32 @@
         <button id="stop-button" class="danger" type="button" disabled>Stop</button>
         <button id="copy-logs-button" class="secondary copy-logs" type="button">Copy logs</button>
       </div>
+
+      <details id="options-details" class="options-details">
+        <summary class="options-summary">Export settings &amp; preferences</summary>
+        <div class="options-content">
+          <div class="custom-folder-row">
+            <label for="custom-folder-input" class="folder-input-label">Save folder in Downloads:</label>
+            <div class="folder-input-group">
+              <input type="text" id="custom-folder-input" class="folder-input" placeholder="e.g. Flow/EP02 or Drama" autocomplete="off" spellcheck="false">
+              <button type="button" id="custom-folder-reset" class="reset-folder-btn" title="Reset to auto project folder">Default</button>
+            </div>
+            <span class="folder-hint">Leave blank to use <code>Flow/&lt;Project&gt;/</code></span>
+          </div>
+          <label class="option-label">
+            <input type="checkbox" id="opt-subfolders" checked>
+            <span>Organize into subfolders inside Downloads</span>
+          </label>
+          <label class="option-label">
+            <input type="checkbox" id="opt-skip" checked>
+            <span>Skip already downloaded videos</span>
+          </label>
+          <label class="option-label">
+            <input type="checkbox" id="opt-notifications" checked>
+            <span>Desktop notification &amp; completion chime</span>
+          </label>
+        </div>
+      </details>
 
       <p class="footnote">
         Keep the Flow project tab open. 1080p uses Flow’s own upscale option and requires an eligible account.

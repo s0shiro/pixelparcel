@@ -5,23 +5,38 @@ const controls = {
   jobMessage: document.querySelector("#job-message"),
   jobMode: document.querySelector("#job-mode"),
   progressBar: document.querySelector("#progress-bar"),
+  timingRow: document.querySelector("#timing-row"),
+  elapsedTime: document.querySelector("#elapsed-time"),
+  speedStat: document.querySelector("#speed-stat"),
+  etaTime: document.querySelector("#eta-time"),
   found: document.querySelector("#found-count"),
   success: document.querySelector("#success-count"),
   failed: document.querySelector("#failed-count"),
+  skippedWrapper: document.querySelector("#skipped-wrapper"),
+  skipped: document.querySelector("#skipped-count"),
   lastError: document.querySelector("#last-error"),
   failureReport: document.querySelector("#failure-report"),
   failureList: document.querySelector("#failure-list"),
+  filterInput: document.querySelector("#filter-input"),
+  filterClear: document.querySelector("#filter-clear"),
+  filterStatus: document.querySelector("#filter-status"),
   scan: document.querySelector("#scan-button"),
   download720: document.querySelector("#download-720-button"),
   download1080: document.querySelector("#download-1080-button"),
   retry: document.querySelector("#retry-button"),
   stop: document.querySelector("#stop-button"),
   copyLogs: document.querySelector("#copy-logs-button"),
+  optSubfolders: document.querySelector("#opt-subfolders"),
+  optSkip: document.querySelector("#opt-skip"),
+  optNotifications: document.querySelector("#opt-notifications"),
+  customFolderInput: document.querySelector("#custom-folder-input"),
+  customFolderReset: document.querySelector("#custom-folder-reset"),
 };
 
 let flowTab = null;
 let refreshing = false;
 let lastState = null;
+let knownVideos = [];
 
 async function getFlowTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -38,6 +53,43 @@ async function send(message) {
   return chrome.tabs.sendMessage(flowTab.id, message);
 }
 
+function updateFilterUI() {
+  const query = controls.filterInput?.value?.trim() || "";
+  if (controls.filterClear) {
+    controls.filterClear.hidden = !query;
+  }
+
+  if (!query) {
+    if (controls.filterStatus) {
+      controls.filterStatus.hidden = true;
+      controls.filterStatus.textContent = "";
+    }
+    if (controls.download720) controls.download720.textContent = "Download all 720p";
+    if (controls.download1080) controls.download1080.textContent = "Upscale + download all 1080p";
+    return;
+  }
+
+  const Core = globalThis.FlowBulkCore;
+  let matchCount = null;
+  if (knownVideos.length > 0 && Core?.matchesFilter) {
+    const matched = knownVideos.filter((v, i) => Core.matchesFilter(v, i, query));
+    matchCount = matched.length;
+    if (controls.filterStatus) {
+      controls.filterStatus.textContent = `${matchCount} of ${knownVideos.length} videos match filter`;
+      controls.filterStatus.hidden = false;
+    }
+  } else {
+    if (controls.filterStatus) {
+      controls.filterStatus.textContent = `Filter active: "${query}"`;
+      controls.filterStatus.hidden = false;
+    }
+  }
+
+  const countLabel = matchCount !== null ? `${matchCount} filtered` : "filtered";
+  if (controls.download720) controls.download720.textContent = `Download ${countLabel} 720p`;
+  if (controls.download1080) controls.download1080.textContent = `Upscale + download ${countLabel} 1080p`;
+}
+
 function render(state) {
   lastState = state;
   const running = Boolean(state?.running);
@@ -45,6 +97,7 @@ function render(state) {
   const processed = Number(state?.processed || 0);
   const success = Number(state?.success || 0);
   const failed = Number(state?.failed || 0);
+  const skipped = Number(state?.skipped || 0);
   const denominator = Math.max(found, processed, 1);
   const progress = running ? Math.min(98, (processed / denominator) * 100) : (processed ? 100 : 0);
 
@@ -54,8 +107,18 @@ function render(state) {
   controls.found.textContent = found;
   controls.success.textContent = success;
   controls.failed.textContent = failed;
+
+  if (controls.skipped) controls.skipped.textContent = skipped;
+  if (controls.skippedWrapper) controls.skippedWrapper.hidden = skipped === 0;
+
+  if (controls.elapsedTime) controls.elapsedTime.textContent = state?.elapsed || "00:00";
+  if (controls.speedStat) controls.speedStat.textContent = state?.speed || "--";
+  if (controls.etaTime) controls.etaTime.textContent = state?.eta || "--:--";
+  if (controls.timingRow) controls.timingRow.hidden = !running && (!state?.elapsed || state.elapsed === "00:00");
+
   controls.lastError.textContent = state?.lastError ? `Last error: ${state.lastError}` : "";
   controls.lastError.hidden = !state?.lastError;
+
   const failures = Array.isArray(state?.failures) ? state.failures : [];
   controls.failureList.replaceChildren(...failures.map((failure) => {
     const item = document.createElement("div");
@@ -79,6 +142,8 @@ function render(state) {
     ? "Retry 1 failed video"
     : `Retry ${failures.length} failed videos`;
   controls.stop.disabled = !running || !flowTab;
+
+  updateFilterUI();
 }
 
 async function refresh() {
@@ -98,6 +163,16 @@ async function refresh() {
     }
     controls.pageStatus.textContent = "Current Flow project detected";
     controls.pageStatus.classList.remove("error");
+
+    if (flowTab?.id && knownVideos.length === 0) {
+      void send({ type: "FLOW_GET_INVENTORY" }).then((res) => {
+        if (res?.ok && Array.isArray(res.videos) && res.videos.length > 0) {
+          knownVideos = res.videos;
+          updateFilterUI();
+        }
+      }).catch(() => undefined);
+    }
+
     render(state);
   } catch (error) {
     flowTab = null;
@@ -119,11 +194,79 @@ async function issue(message) {
   }
 }
 
+function getBatchOptions() {
+  return {
+    filter: controls.filterInput?.value?.trim() || "",
+    skipDownloaded: controls.optSkip?.checked !== false,
+    organizeSubfolders: controls.optSubfolders?.checked !== false,
+    soundNotifications: controls.optNotifications?.checked !== false,
+    customFolder: controls.customFolderInput?.value?.trim() || "",
+  };
+}
+
 controls.scan.addEventListener("click", () => issue({ type: "FLOW_SCAN_PROJECT" }));
-controls.download720.addEventListener("click", () => issue({ type: "FLOW_START_BATCH", quality: "720p" }));
-controls.download1080.addEventListener("click", () => issue({ type: "FLOW_START_BATCH", quality: "1080p" }));
-controls.retry.addEventListener("click", () => issue({ type: "FLOW_RETRY_FAILURES" }));
+
+controls.download720.addEventListener("click", () => {
+  issue({ type: "FLOW_START_BATCH", quality: "720p", ...getBatchOptions() });
+});
+
+controls.download1080.addEventListener("click", () => {
+  issue({ type: "FLOW_START_BATCH", quality: "1080p", ...getBatchOptions() });
+});
+
+controls.retry.addEventListener("click", () => {
+  issue({ type: "FLOW_RETRY_FAILURES", ...getBatchOptions() });
+});
+
 controls.stop.addEventListener("click", () => issue({ type: "FLOW_STOP_BATCH" }));
+
+controls.filterInput?.addEventListener?.("input", updateFilterUI);
+controls.filterClear?.addEventListener?.("click", () => {
+  if (controls.filterInput) controls.filterInput.value = "";
+  updateFilterUI();
+});
+
+function saveOptions() {
+  if (chrome.storage?.local?.set) {
+    chrome.storage.local.set({
+      organizeSubfolders: controls.optSubfolders?.checked !== false,
+      skipDownloaded: controls.optSkip?.checked !== false,
+      soundNotifications: controls.optNotifications?.checked !== false,
+      customFolder: controls.customFolderInput?.value?.trim() || "",
+    }).catch(() => undefined);
+  }
+}
+
+async function loadOptions() {
+  if (chrome.storage?.local?.get) {
+    try {
+      const saved = await chrome.storage.local.get(["organizeSubfolders", "skipDownloaded", "soundNotifications", "customFolder"]);
+      if (typeof saved?.organizeSubfolders === "boolean" && controls.optSubfolders) {
+        controls.optSubfolders.checked = saved.organizeSubfolders;
+      }
+      if (typeof saved?.skipDownloaded === "boolean" && controls.optSkip) {
+        controls.optSkip.checked = saved.skipDownloaded;
+      }
+      if (typeof saved?.soundNotifications === "boolean" && controls.optNotifications) {
+        controls.optNotifications.checked = saved.soundNotifications;
+      }
+      if (typeof saved?.customFolder === "string" && controls.customFolderInput) {
+        controls.customFolderInput.value = saved.customFolder;
+      }
+    } catch {}
+  }
+}
+
+controls.optSubfolders?.addEventListener?.("change", saveOptions);
+controls.optSkip?.addEventListener?.("change", saveOptions);
+controls.optNotifications?.addEventListener?.("change", saveOptions);
+controls.customFolderInput?.addEventListener?.("input", saveOptions);
+controls.customFolderReset?.addEventListener?.("click", () => {
+  if (controls.customFolderInput) {
+    controls.customFolderInput.value = "";
+    saveOptions();
+  }
+});
 
 function formatLogs(state) {
   const timestamp = new Date().toISOString();
@@ -141,7 +284,10 @@ function formatLogs(state) {
   lines.push(`Mode: ${state.mode || "Idle"}`);
   lines.push(`Message: ${state.message || "Ready"}`);
   lines.push(`Quality: ${state.quality || state.lastQuality || "N/A"}`);
-  lines.push(`Stats: ${state.found || 0} found | ${state.success || 0} downloaded | ${state.failed || 0} failed`);
+  lines.push(`Stats: ${state.found || 0} found | ${state.success || 0} downloaded${state.skipped ? ` (${state.skipped} skipped)` : ""} | ${state.failed || 0} failed`);
+  if (state.elapsed || state.eta) {
+    lines.push(`Timing: Elapsed: ${state.elapsed || "00:00"} | Speed: ${state.speed || "--"} | ETA: ${state.eta || "--:--"}`);
+  }
 
   if (state.lastError) {
     lines.push(`Last error: ${state.lastError}`);
@@ -220,7 +366,9 @@ controls.copyLogs?.addEventListener("click", async () => {
 });
 
 (async function initialize() {
+  await loadOptions();
   render(null);
   await refresh();
   setInterval(refresh, 600);
 })();
+
