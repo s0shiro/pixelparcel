@@ -1,0 +1,10 @@
+{
+  "name": "flow-bulk-video-exporter",
+  "version": "1.7.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "check": "node --check core.js && node --check modern-flow.js && node --check background.js && node --check popup.js && node --check content.js",
+    "test:browser": "bash tests/browser-smoke.sh && bash tests/modern-browser-smoke.sh"
+  }
+}
