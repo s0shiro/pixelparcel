@@ -12,6 +12,7 @@
     const factor = text.match(/\b(1x|2x|4x)\b/i)?.[1];
     if (factor) return factor.toLowerCase();
     if (/\boriginal\b/i.test(text)) return "original";
+    if (/\bupscal/i.test(text)) return "1080p";
     return text.replace(/\s+/g, "-");
   }
 
