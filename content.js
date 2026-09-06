@@ -26,6 +26,11 @@
     success: 0,
     failed: 0,
     skipped: 0,
+    startTime: null,
+    elapsed: "00:00",
+    eta: "--:--",
+    speed: "--",
+    projectTitle: "",
     failures: [],
     message: "Ready",
     lastError: "",
@@ -34,6 +39,8 @@
   let pendingDownload = null;
   let inventoryCache = null;
   let modernInventoryCache = null;
+  let activeSubfolder = "";
+  let activeIsCustomFolder = false;
   const activityLogs = [];
 
   function log(message) {
@@ -42,6 +49,63 @@
     activityLogs.push(entry);
     if (activityLogs.length > 300) activityLogs.shift();
     console.log(`[FlowExporter] ${message}`);
+  }
+
+  function getProjectTitle() {
+    try {
+      const fromInput = document.querySelector("flow-project-title input, [data-project-title] input, input[aria-label*='project' i], input[aria-label*='Project title' i]")?.value;
+      if (fromInput?.trim()) return fromInput.trim();
+      const fromEl = document.querySelector("flow-project-title flow-editable-text, [data-project-title], [aria-label*='Project title' i], [aria-label*='Project name' i]")?.textContent;
+      if (fromEl?.trim()) return fromEl.trim();
+      const h1 = document.querySelector("h1")?.textContent;
+      if (h1?.trim()) return h1.trim();
+      const docTitle = (document.title || "")
+        .replace(/\s*[-|•]\s*Google\s*Flow.*$/i, "")
+        .replace(/\s*[-|•]\s*Flow.*$/i, "")
+        .trim();
+      return docTitle || "Flow_Project";
+    } catch {
+      return "Flow_Project";
+    }
+  }
+
+  function playCompletionChime(isSuccess = true) {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      const now = ctx.currentTime;
+      if (isSuccess) {
+        osc.frequency.setValueAtTime(587.33, now);
+        osc.frequency.setValueAtTime(880, now + 0.12);
+        gain.gain.setValueAtTime(0.12, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+        osc.start(now);
+        osc.stop(now + 0.4);
+      } else {
+        osc.frequency.setValueAtTime(440, now);
+        osc.frequency.setValueAtTime(311.13, now + 0.15);
+        gain.gain.setValueAtTime(0.12, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+        osc.start(now);
+        osc.stop(now + 0.4);
+      }
+    } catch {}
+  }
+
+  async function notifyCompletion(title, message) {
+    try {
+      await chrome.runtime.sendMessage({
+        type: "FLOW_NOTIFY_COMPLETION",
+        title,
+        message,
+      });
+    } catch {}
   }
 
   function snapshotState() {
@@ -703,8 +767,15 @@
       }, timeoutMs);
     }).finally(() => clearTimeout(timer));
 
-    const ready = chrome.runtime.sendMessage({ type: "FLOW_WATCH_DOWNLOAD", token })
-      .catch(() => ({ ok: false }));
+    const projectTitle = getProjectTitle();
+    const subfolder = activeSubfolder || Core.sanitizeFolder(projectTitle);
+    const ready = chrome.runtime.sendMessage({
+      type: "FLOW_WATCH_DOWNLOAD",
+      token,
+      projectTitle,
+      subfolder,
+      isCustom: activeIsCustomFolder,
+    }).catch(() => ({ ok: false }));
     return { promise, ready };
   }
 
@@ -735,11 +806,16 @@
     const url = videoSource(video);
     if (!url) throw new Error("Flow produced the upscale, but its video URL was not available.");
 
+    const projectTitle = getProjectTitle();
+    const subfolder = activeSubfolder || Core.sanitizeFolder(projectTitle);
+
     if (!url.startsWith("blob:")) {
       const response = await chrome.runtime.sendMessage({
         type: "FLOW_DIRECT_DOWNLOAD",
         url,
         filename,
+        subfolder,
+        isCustom: activeIsCustomFolder,
       });
       if (response?.ok) return true;
     }
@@ -755,10 +831,14 @@
   }
 
   async function directDownloadMediaId(mediaId, filename) {
+    const projectTitle = getProjectTitle();
+    const subfolder = activeSubfolder || Core.sanitizeFolder(projectTitle);
     const response = await chrome.runtime.sendMessage({
       type: "FLOW_DOWNLOAD_MEDIA",
       mediaId,
       filename,
+      subfolder,
+      isCustom: activeIsCustomFolder,
     });
     if (!response?.ok) throw new Error(response?.error || "Chrome could not start the Flow download.");
     await waitForDownloadCompletion(response.downloadId);
@@ -1123,7 +1203,8 @@
     while (!state.stopRequested && downwardsPasses < 60) {
       const m = metrics();
       const atBottom = m.top + m.viewport >= m.height - 10;
-      if (atBottom || Math.abs(m.top - lastTop) < 2) break;
+      if (lastTop !== -1 && Math.abs(m.top - lastTop) < 2) break;
+      if (atBottom && downwardsPasses > 0) break;
       lastTop = m.top;
       downwardsPasses += 1;
 
@@ -1326,9 +1407,41 @@
       success: 0,
       failed: 0,
       skipped: 0,
+      startTime: mode === "Scan" ? null : Date.now(),
+      elapsed: "00:00",
+      eta: "--:--",
+      speed: "--",
+      projectTitle: getProjectTitle(),
       failures: [],
       message: mode === "Scan" ? "Scanning project…" : `Preparing ${quality} export…`,
       lastError: "",
+    });
+  }
+
+  function updateTimingStats(totalCount) {
+    if (!state.startTime) return;
+    const now = Date.now();
+    const elapsedMs = Math.max(0, now - state.startTime);
+    state.elapsed = Core.formatDuration(elapsedMs);
+    const finishedCount = state.success + state.failed;
+    if (finishedCount > 0) {
+      const avgMs = elapsedMs / finishedCount;
+      const remainingCount = Math.max(0, totalCount - state.processed);
+      state.eta = Core.formatDuration(avgMs * remainingCount);
+      state.speed = `${Math.round(avgMs / 1000)}s/item`;
+    }
+  }
+
+  function isAlreadyDownloaded(video, existingFilenames) {
+    if (!existingFilenames?.length) return false;
+    const title = (video?.title || "").trim();
+    if (!title || title.length < 3) return false;
+    const safeTitle = Core.safeFilename(title, "");
+    if (!safeTitle) return false;
+    const lowerSafe = safeTitle.toLowerCase();
+    return existingFilenames.some((name) => {
+      const lowerName = name.toLowerCase();
+      return lowerName.startsWith(lowerSafe) || lowerName.includes(lowerSafe);
     });
   }
 
@@ -1355,8 +1468,15 @@
     }
   }
 
-  async function runBatch(quality, requestedFailures = null) {
+  async function runBatch(quality, requestedFailures = null, options = {}) {
     if (state.running) return;
+    if (options.customFolder) {
+      activeSubfolder = Core.sanitizeFolderPath(options.customFolder, "Flow_Export");
+      activeIsCustomFolder = true;
+    } else {
+      activeSubfolder = Core.sanitizeFolder(getProjectTitle());
+      activeIsCustomFolder = false;
+    }
     resetState(quality === "720p" ? "720p export" : "1080p upscale", quality);
     log(`Batch export started: quality=${quality}, target=${requestedFailures?.length ? `${requestedFailures.length} failed videos` : "all videos"}`);
 
@@ -1381,14 +1501,33 @@
           }
         }
         videos = selected;
+      } else if (options.filter) {
+        const rawCount = completeInventory.length;
+        videos = completeInventory.filter((video, index) => Core.matchesFilter(video, index, options.filter));
+        log(`Filter applied: "${options.filter}" (${videos.length}/${rawCount} matched).`);
       }
       state.found = videos.length;
       log(`Inventory resolved: ${videos.length} videos queued for ${quality}.`);
+
+      let existingFilenames = [];
+      if (!requestedFailures?.length && options.skipDownloaded !== false) {
+        try {
+          const res = await chrome.runtime.sendMessage({ type: "FLOW_GET_DOWNLOAD_HISTORY" });
+          if (res?.ok && Array.isArray(res.filenames)) existingFilenames = res.filenames;
+        } catch {}
+      }
 
       if (quality === "720p" && !usesModernFlow()) {
         for (let index = 0; index < videos.length && !state.stopRequested; index += 1) {
           const video = videos[index];
           const videoTitle = video.title || video.mediaId || `Video ${index + 1}`;
+          if (options.skipDownloaded !== false && isAlreadyDownloaded(video, existingFilenames)) {
+            state.skipped += 1;
+            state.processed += 1;
+            log(`[#${index + 1}/${videos.length}] Skipping "${videoTitle}" (already downloaded).`);
+            updateTimingStats(videos.length);
+            continue;
+          }
           log(`[#${index + 1}/${videos.length}] Direct downloading "${videoTitle}"…`);
           state.message = `720p: downloading video ${index + 1}/${videos.length}…`;
           try {
@@ -1403,6 +1542,7 @@
             recordFailure(video, index + 1, error);
           } finally {
             state.processed += 1;
+            updateTimingStats(videos.length);
             await sleep(120);
           }
         }
@@ -1418,6 +1558,13 @@
         for (let index = 0; index < videos.length && !state.stopRequested; index += 1) {
           const video = videos[index];
           const videoTitle = video.title || video.mediaId || `Video ${index + 1}`;
+          if (options.skipDownloaded !== false && isAlreadyDownloaded(video, existingFilenames)) {
+            state.skipped += 1;
+            state.processed += 1;
+            log(`[#${index + 1}/${videos.length}] Skipping "${videoTitle}" (already downloaded).`);
+            updateTimingStats(videos.length);
+            continue;
+          }
           log(`[#${index + 1}/${videos.length}] Locating "${videoTitle}" in grid…`);
           state.message = `${quality}: locating video ${index + 1}/${videos.length}…`;
 
@@ -1439,6 +1586,7 @@
             state.message = `${quality}: ${error.message}`;
           } finally {
             state.processed += 1;
+            updateTimingStats(videos.length);
             await closeActiveMenus();
             await sleep(800);
           }
@@ -1453,6 +1601,13 @@
         const targetById = new Map(videos.map((video) => [video.mediaId, video]));
         const walkResult = await walkMediaGrid(targetById, async (card, matchIndex, video) => {
           const videoTitle = video?.title || video?.mediaId || `Video ${state.processed + 1}`;
+          if (options.skipDownloaded !== false && isAlreadyDownloaded(video, existingFilenames)) {
+            state.skipped += 1;
+            state.processed += 1;
+            log(`[#${state.processed}/${videos.length}] Skipping "${videoTitle}" (already downloaded).`);
+            updateTimingStats(videos.length);
+            return;
+          }
           log(`[#${state.processed + 1}/${videos.length}] Exporting "${videoTitle}"…`);
           state.message = `${quality}: processing video ${state.processed + 1}/${videos.length}…`;
           try {
@@ -1466,6 +1621,7 @@
             state.message = `${quality}: ${error.message}`;
           } finally {
             state.processed += 1;
+            updateTimingStats(videos.length);
             await closeActiveMenus();
             await sleep(800);
           }
@@ -1484,10 +1640,18 @@
         }
       }
 
+      updateTimingStats(videos.length);
       if (state.stopRequested) {
-        state.message = `Stopped — ${state.success} downloaded, ${state.failed} failed`;
+        state.message = `Stopped — ${state.success} downloaded, ${state.failed} failed${state.skipped ? `, ${state.skipped} skipped` : ""}`;
       } else {
-        state.message = `Finished — ${state.success} downloaded, ${state.failed} failed`;
+        state.message = `Finished — ${state.success} downloaded, ${state.failed} failed${state.skipped ? `, ${state.skipped} skipped` : ""}`;
+        if (options.soundNotifications !== false) {
+          playCompletionChime(state.failed === 0);
+          void notifyCompletion(
+            "Flow Export Complete",
+            `${state.success} downloaded, ${state.failed} failed${state.skipped ? ` (${state.skipped} skipped)` : ""}.`,
+          );
+        }
       }
       log(state.message);
     } catch (error) {
@@ -1520,7 +1684,15 @@
         sendResponse({ ok: false, error: "Unsupported export quality." });
         return false;
       }
-      if (!state.running) void runBatch(message.quality);
+      if (!state.running) {
+        void runBatch(message.quality, null, {
+          filter: message.filter || "",
+          skipDownloaded: message.skipDownloaded !== false,
+          organizeSubfolders: message.organizeSubfolders !== false,
+          soundNotifications: message.soundNotifications !== false,
+          customFolder: message.customFolder || "",
+        });
+      }
       sendResponse({ ok: true, state: snapshotState() });
       return false;
     }
@@ -1539,8 +1711,25 @@
       const uniqueFailures = retryable.filter((failure, index, failures) => {
         return failures.findIndex((candidate) => candidate.mediaId === failure.mediaId) === index;
       });
-      void runBatch(quality, uniqueFailures);
+      void runBatch(quality, uniqueFailures, {
+        filter: "",
+        skipDownloaded: false,
+        organizeSubfolders: message.organizeSubfolders !== false,
+        soundNotifications: message.soundNotifications !== false,
+        customFolder: message.customFolder || "",
+      });
       sendResponse({ ok: true, retryCount: uniqueFailures.length });
+      return false;
+    }
+
+    if (message?.type === "FLOW_GET_INVENTORY") {
+      const inventory = modernInventoryCache?.videos || inventoryCache || [];
+      const videos = inventory.map((v, i) => ({
+        index: i + 1,
+        title: v.title || v.mediaId || `Video ${i + 1}`,
+        mediaId: v.mediaId,
+      }));
+      sendResponse({ ok: true, videos });
       return false;
     }
 
