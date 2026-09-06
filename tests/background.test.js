@@ -25,7 +25,7 @@ function worker({ fetch = async () => { throw new Error("Unexpected fetch"); }, 
       tabs: { async sendMessage(tabId, message) { sent.push({ tabId, ...message }); } },
       downloads: {
         async download() { return 10; },
-        async search({ id }) { return downloads.has(id) ? [downloads.get(id)] : []; },
+        async search(query = {}) { if (query.id !== undefined) return downloads.has(query.id) ? [downloads.get(query.id)] : []; return [...downloads.values()]; },
         onCreated: { addListener: (fn) => { listeners.created = fn; } },
         onChanged: { addListener: (fn) => { listeners.changed = fn; } },
       },
@@ -134,4 +134,22 @@ test("direct downloads expose completion and interruption, not just an ID", asyn
   const result = await w.send({ type: "FLOW_DOWNLOAD_STATUS", downloadId: 10 });
   assert.equal(result.state, "interrupted");
   assert.equal(result.error, "SERVER_FORBIDDEN");
+});
+
+test("check download watch detects completed download via polling", async () => {
+  const w = worker();
+  await w.send({ type: "FLOW_WATCH_DOWNLOAD", token: "poll-token" });
+  w.downloads.set(5, {
+    id: 5,
+    url: "blob:https://flow.google.com/upscaled-video",
+    state: "complete",
+    startTime: new Date().toISOString(),
+  });
+  const check = await w.send({ type: "FLOW_CHECK_DOWNLOAD_WATCH", token: "poll-token" });
+  assert.equal(check.ok, true);
+  assert.equal(check.matched, true);
+  assert.equal(check.state, "complete");
+  assert.equal(w.sent.length, 1);
+  assert.equal(w.sent[0].type, "FLOW_DOWNLOAD_DETECTED");
+  assert.equal(w.sent[0].token, "poll-token");
 });

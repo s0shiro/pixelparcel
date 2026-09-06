@@ -34,9 +34,17 @@ async function openPopup(tab, options = {}) {
   const messages = [];
   const queries = [];
   let poll;
+  let clipboardText = null;
   const model = { tab, connected: true, queryError: null, ...options };
   const context = vm.createContext({
     URL,
+    setTimeout,
+    clearTimeout,
+    navigator: {
+      clipboard: {
+        async writeText(text) { clipboardText = text; },
+      },
+    },
     document: {
       querySelector(selector) {
         if (!elements.has(selector)) elements.set(selector, element());
@@ -54,7 +62,7 @@ async function openPopup(tab, options = {}) {
         async sendMessage(tabId, message) {
           messages.push({ tabId, ...message });
           if (!model.connected) throw new Error("Receiving end does not exist.");
-          return { running: false, found: 23, failures: [], mode: "Idle" };
+          return model.status || { running: false, found: 23, failures: [], mode: "Idle" };
         },
       },
     },
@@ -66,6 +74,7 @@ async function openPopup(tab, options = {}) {
   return {
     model, messages, queries,
     get: (selector) => elements.get(selector),
+    getClipboard: () => clipboardText,
     async refresh() {
       assert.equal(typeof poll, "function", "Keep checking even after an initial detection failure");
       await poll();
@@ -141,6 +150,45 @@ test("reports tab-query errors without leaving the popup stuck checking", async 
   popup.model.tab = { id: 42, url: "https://flow.google.com/" };
   await popup.refresh();
   assert.equal(popup.get("#scan-button").disabled, false);
+});
+
+test("copies diagnostic logs to clipboard with failure details and activity logs", async () => {
+  const popup = await openPopup(
+    { id: 42, url: "https://flow.google.com/project/example" },
+    {
+      status: {
+        running: false,
+        mode: "Idle",
+        message: "Finished — 21 downloaded, 2 failed",
+        found: 30,
+        processed: 23,
+        success: 21,
+        failed: 2,
+        lastError: "1080p is not available for this video or account.",
+        failures: [
+          { index: 9, title: "12_02-RH-12-BUNG_SH-02_V2_POV_WALKIN.mp4", error: "Flow menu timed out" },
+          { index: 10, title: "18_01-RH-09-BUNG_SH-02_V3_TRUCK_LEFT.mp4", error: "1080p is not available" },
+        ],
+        logs: [
+          "[19:35:01] Starting batch export (1080p)...",
+          "[19:35:10] [#1] Export completed.",
+        ],
+      },
+    },
+  );
+
+  const copyButton = popup.get("#copy-logs-button");
+  assert.ok(copyButton);
+  await copyButton.listeners.click();
+  assert.equal(copyButton.textContent, "✓ Logs copied!");
+  assert.ok(copyButton.classList.contains("copied"));
+
+  const copied = popup.getClipboard();
+  assert.ok(copied.includes("=== FLOW BULK VIDEO EXPORTER LOGS ==="));
+  assert.ok(copied.includes("30 found | 21 downloaded | 2 failed"));
+  assert.ok(copied.includes("#9 — 12_02-RH-12-BUNG_SH-02_V2_POV_WALKIN.mp4: Flow menu timed out"));
+  assert.ok(copied.includes("#10 — 18_01-RH-09-BUNG_SH-02_V3_TRUCK_LEFT.mp4: 1080p is not available"));
+  assert.ok(copied.includes("[19:35:01] Starting batch export (1080p)..."));
 });
 
 test("manifest grants click access and injects on every supported Flow route", () => {

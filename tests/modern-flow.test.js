@@ -31,11 +31,40 @@ test("modern scan identifies thumbnails without treating duplicate titles as the
         return null;
       },
     };
-    return { querySelector: (selector) => selector === "flow-video-tile" && type === "video" ? media : null, getAttribute: () => "Same prompt" };
+    return {
+      querySelector: (selector) => selector === "flow-video-tile" && type === "video" ? media : null,
+      getAttribute: () => `${id}_video.mp4`,
+    };
   }
   const document = { querySelectorAll: () => [tile("one"), tile("two"), tile("picture", "image")] };
   const cards = Modern.videoCards(document, "https://flow.google.com");
   assert.equal(cards.length, 2);
   assert.notEqual(cards[0].mediaId, cards[1].mediaId);
-  assert.ok(cards.every((card) => card.nativeMenu && card.title === "Same prompt"));
+  assert.ok(cards.every((card) => card.nativeMenu));
+  assert.equal(cards[0].title, "one_video.mp4");
+  assert.equal(cards[1].title, "two_video.mp4");
+});
+
+test("modern scan respects visibility predicate and aria-label keys", () => {
+  function tile(ariaLabel, isVisible) {
+    const media = {
+      querySelector: () => null,
+      visible: isVisible,
+    };
+    return {
+      querySelector: (selector) => selector === "flow-video-tile" ? media : null,
+      getAttribute: (attr) => attr === "aria-label" ? ariaLabel : null,
+    };
+  }
+  const document = {
+    querySelectorAll: () => [
+      tile("video_01.mp4", true),
+      tile("video_02.mp4", false),
+      tile("video_03.mp4", true),
+    ],
+  };
+  const cards = Modern.videoCards(document, "https://flow.google.com", (el) => el.visible);
+  assert.equal(cards.length, 2);
+  assert.equal(cards[0].mediaId, "flow-label:video_01.mp4");
+  assert.equal(cards[1].mediaId, "flow-label:video_03.mp4");
 });

@@ -12,6 +12,7 @@ const {
 
 test("normalizes Flow resolution menu labels", () => {
   assert.equal(normalizeResolutionId("1080p (Upscale)"), "1080p");
+  assert.equal(normalizeResolutionId("Upscaled"), "1080p");
   assert.equal(normalizeResolutionId("Download original"), "original");
   assert.equal(normalizeResolutionId("4K · Ultra"), "4k");
 });
