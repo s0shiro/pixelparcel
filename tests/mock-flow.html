@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <style>
+      body { margin: 0; }
+      main { display: grid; grid-template-columns: repeat(2, 240px); gap: 16px; padding: 20px; }
+      .media-card { display: block; width: 240px; height: 135px; padding: 0; border: 0; }
+      .media-card img { display: block; width: 240px; height: 135px; background: #222; }
+      [role="menu"] { position: fixed; top: 10px; right: 10px; z-index: 4; padding: 8px; background: white; }
+      [role="menuitem"] { display: block; width: 180px; height: 32px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <button class="media-card" aria-label="Mock video one">
+        <img alt="Mock video one" src="https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=11111111-1111-4111-8111-111111111111">
+      </button>
+      <button class="media-card" aria-label="Mock video two">
+        <img alt="Mock video two" src="https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=22222222-2222-4222-8222-222222222222">
+      </button>
+    </main>
+    <output id="result">running</output>
+
+    <script>
+      const extensionListeners = [];
+      let watchedToken = "";
+      const mockParams = new URLSearchParams(location.search);
+      const mockInventoryCount = Number(mockParams.get("count") || 0);
+      const titleRemap = mockParams.get("titleRemap") === "1";
+      const submenuMode = mockParams.get("submenu") || "hover";
+      const failDownloadIndex = Number(mockParams.get("failDownload") || 0);
+      let directDownloadCount = 0;
+      const originalFetch = globalThis.fetch.bind(globalThis);
+
+      globalThis.fetch = async function mockFetch(input, options) {
+        if (String(input).includes("flow.projectInitialData") && mockInventoryCount > 0) {
+          const workflows = Array.from({ length: mockInventoryCount }, (_, index) => {
+            const suffix = String(index + 1).padStart(12, "0");
+            return {
+              metadata: {
+                primaryMediaId: `aaaaaaaa-aaaa-4aaa-8aaa-${suffix}`,
+                displayName: titleRemap
+                  ? ["Mock video one", "Mock video two"][index] || `Mock video ${index + 1}`
+                  : `Mock inventory video ${index + 1}`,
+              },
+            };
+          });
+          return {
+            ok: true,
+            status: 200,
+            async json() { return { result: { data: { workflows } } }; },
+          };
+        }
+        return originalFetch(input, options);
+      };
+
+      globalThis.chrome = globalThis.chrome || {};
+      globalThis.chrome.runtime = {
+        onMessage: {
+          addListener(listener) {
+            extensionListeners.push(listener);
+          },
+        },
+        async sendMessage(message) {
+          if (message.type === "FLOW_FETCH_PROJECT") {
+            if (mockParams.has("inventoryFailure")) return { ok: false, error: "Legacy Flow project request could not connect." };
+            const response = await globalThis.fetch("mock:flow.projectInitialData");
+            return { ok: response.ok, payload: await response.json() };
+          }
+          if (message.type === "FLOW_DOWNLOAD_STATUS") return { ok: true, state: "complete" };
+          if (message.type === "FLOW_WATCH_DOWNLOAD") watchedToken = message.token;
+          if (message.type === "FLOW_CLASSIFY_MEDIA_IDS") {
+            return {
+              ok: true,
+              types: Object.fromEntries(message.mediaIds.map((mediaId) => [mediaId, "video"])),
+            };
+          }
+          if (message.type === "FLOW_DOWNLOAD_MEDIA") {
+            directDownloadCount += 1;
+            if (directDownloadCount === failDownloadIndex) {
+              return { ok: false, error: "Mock download failure" };
+            }
+            return { ok: true, downloadId: Date.now() };
+          }
+          return { ok: true };
+        },
+      };
+
+      function removeMenus() {
+        document.querySelectorAll('[role="menu"]').forEach((menu) => menu.remove());
+      }
+
+      function sendToExtension(message) {
+        for (const listener of extensionListeners) listener(message, {}, () => undefined);
+      }
+
+      function showResolutions() {
+        removeMenus();
+        const menu = document.createElement("div");
+        menu.setAttribute("role", "menu");
+        for (const label of ["720p Original Size", "1080p Upscaled"]) {
+          const item = document.createElement("button");
+          item.setAttribute("role", "menuitem");
+          item.textContent = label;
+          item.addEventListener("click", () => {
+            const token = watchedToken;
+            removeMenus();
+            setTimeout(() => sendToExtension({
+              type: "FLOW_DOWNLOAD_DETECTED",
+              token,
+              downloadId: Date.now(),
+              filename: `${label}.mp4`,
+            }), 25);
+          });
+          menu.append(item);
+        }
+        document.body.append(menu);
+      }
+
+      for (const card of document.querySelectorAll(".media-card")) {
+        card.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          removeMenus();
+          const menu = document.createElement("div");
+          menu.setAttribute("role", "menu");
+          const download = document.createElement("button");
+          download.setAttribute("role", "menuitem");
+          download.setAttribute("aria-haspopup", "menu");
+          download.textContent = "download Download";
+          if (submenuMode === "hover") download.addEventListener("mouseenter", showResolutions);
+          download.addEventListener("click", showResolutions);
+          menu.append(download);
+          document.body.append(menu);
+        });
+      }
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") removeMenus();
+      });
+    </script>
+    <script src="../core.js"></script>
+    <script src="../modern-flow.js"></script>
+    <script src="../content.js"></script>
+    <script>
+      const requestedQuality = mockParams.get("quality") || "720p";
+      const requestedMode = mockParams.get("mode") || "batch";
+      let retryStarted = false;
+      setTimeout(() => sendToExtension(
+        requestedMode === "scan"
+          ? { type: "FLOW_SCAN_PROJECT" }
+          : { type: "FLOW_START_BATCH", quality: requestedQuality },
+      ), 50);
+
+      const poll = setInterval(() => {
+        let latest;
+        for (const listener of extensionListeners) {
+          listener({ type: "FLOW_GET_STATUS" }, {}, (value) => { latest = value; });
+        }
+        if (!latest || latest.running) return;
+        if (requestedMode === "retry-test" && latest.failures?.length && !retryStarted) {
+          retryStarted = true;
+          sendToExtension({ type: "FLOW_RETRY_FAILURES" });
+          return;
+        }
+        clearInterval(poll);
+        const result = document.querySelector("#result");
+        result.textContent = latest.message;
+        result.dataset.success = String(latest.success);
+        result.dataset.failed = String(latest.failed);
+        result.dataset.lastError = latest.lastError;
+        result.dataset.found = String(latest.found);
+        result.dataset.failureCount = String(latest.failures?.length || 0);
+        result.dataset.failureIndex = String(latest.failures?.[0]?.index || 0);
+        result.dataset.failureMediaId = latest.failures?.[0]?.mediaId || "";
+        result.dataset.retryCompleted = String(retryStarted && latest.success === 1 && latest.failed === 0);
+      }, 100);
+    </script>
+  </body>
+</html>

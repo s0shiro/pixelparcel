@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; }
+    aisandbox-root, main { display: block; }
+    cdk-virtual-scroll-viewport { display: block; height: 310px; width: 480px; overflow-y: auto; }
+    #tiles { position: relative; }
+    flow-grid-tile-container { position: absolute; display: block; left: 12px; width: 240px; height: 140px; }
+    flow-video-tile, flow-image-tile, img { display: block; width: 240px; height: 140px; }
+    flow-menu-item { display: block; }
+    [role="menu"] { position: fixed; top: 5px; left: 510px; padding: 10px; background: white; }
+    [role="menuitem"] { display: block; width: 180px; height: 40px; }
+  </style>
+</head>
+<body>
+  <aisandbox-root>
+    <main>
+      <a aria-label="Videos" aria-current="page">videocam Videos</a>
+      <button id="unrelated-resolution">720p</button>
+      <cdk-virtual-scroll-viewport><div id="tiles"></div></cdk-virtual-scroll-viewport>
+    </main>
+  </aisandbox-root>
+  <output id="result">running</output>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const count = Number(params.get("count") || 7);
+    const quality = params.get("quality") || "720p";
+    const mode = params.get("mode") || "batch";
+    const failIndex = Number(params.get("failIndex") || 0);
+    const lowResolution = params.has("lowResolution");
+    let renderTimeOffset = 0;
+    const realNow = Date.now;
+    Date.now = () => realNow() + renderTimeOffset;
+    let legacyRequests = 0;
+    let fetchRequests = 0;
+    let wrongQuality = false;
+    let unrelatedClicks = 0;
+    let activeToken = "";
+    let retryStarted = false;
+    const attempts = new Map();
+    const listeners = [];
+    const tileCache = new Map();
+    const viewport = document.querySelector("cdk-virtual-scroll-viewport");
+    const tiles = document.querySelector("#tiles");
+    tiles.style.height = `${(count + 1) * 150}px`;
+
+    function send(message) {
+      let result;
+      for (const listener of listeners) listener(message, {}, (value) => { result = value; });
+      return result;
+    }
+    globalThis.fetch = async () => { fetchRequests += 1; throw new TypeError("Failed to fetch"); };
+    globalThis.chrome = { runtime: {
+      onMessage: { addListener: (listener) => listeners.push(listener) },
+      async sendMessage(message) {
+        if (message.type === "FLOW_WATCH_DOWNLOAD") activeToken = message.token;
+        if (["FLOW_FETCH_PROJECT", "FLOW_DOWNLOAD_MEDIA", "FLOW_CLASSIFY_MEDIA_IDS"].includes(message.type)) {
+          legacyRequests += 1;
+          return { ok: false, error: "Legacy API must not be used on new Flow" };
+        }
+        return { ok: true };
+      },
+    } };
+
+    function closeMenus() { document.querySelectorAll('[role="menu"]').forEach((menu) => menu.remove()); }
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeMenus(); });
+    document.querySelector("#unrelated-resolution").onclick = () => { unrelatedClicks += 1; };
+
+    function showResolutions(index) {
+      closeMenus();
+      const menu = document.createElement("div");
+      menu.setAttribute("role", "menu");
+      const resolutions = lowResolution ? ["360p"] : ["720p", "1080p"];
+      for (const resolution of resolutions) {
+        const host = document.createElement("flow-menu-item");
+        const button = document.createElement("button");
+        button.setAttribute("role", "menuitem");
+        button.textContent = `${resolution} ${resolution === "1080p" ? "Upscaled" : "Original size"}`;
+        button.addEventListener("click", () => {
+          const token = activeToken;
+          attempts.set(index, (attempts.get(index) || 0) + 1);
+          if (params.has("longUpscale")) renderTimeOffset += 310000;
+          wrongQuality ||= resolution !== quality;
+          closeMenus();
+          setTimeout(() => send(index === failIndex && attempts.get(index) === 1
+            ? { type: "FLOW_DOWNLOAD_FAILED", token, error: "Chrome download failed: NETWORK_FAILED. Retry this video." }
+            : { type: "FLOW_DOWNLOAD_DETECTED", token, downloadId: index, filename: `video-${index}.mp4` }), 60);
+        });
+        host.append(button);
+        menu.append(host);
+      }
+      document.body.append(menu);
+    }
+
+    function card(index) {
+      if (tileCache.has(index)) return tileCache.get(index);
+      const tile = document.createElement("flow-grid-tile-container");
+      // Duplicate titles deliberately exercise identity independent of prompts.
+      tile.setAttribute("aria-label", "The same video prompt");
+      tile.style.top = `${index * 150}px`;
+      const media = document.createElement(index === count ? "flow-image-tile" : "flow-video-tile");
+      const image = document.createElement("img");
+      image.className = "thumbnail";
+      image.src = `thumbnail-${index}.jpg`;
+      media.append(image);
+      tile.append(media);
+      tile.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        closeMenus();
+        const menu = document.createElement("div");
+        menu.setAttribute("role", "menu");
+        const host = document.createElement("flow-menu-item");
+        const button = document.createElement("button");
+        button.setAttribute("role", "menuitem");
+        button.setAttribute("aria-haspopup", "menu");
+        button.textContent = "download Download";
+        host.addEventListener("mouseenter", () => showResolutions(index + 1));
+        button.addEventListener("click", () => showResolutions(index + 1));
+        host.append(button);
+        menu.append(host);
+        document.body.append(menu);
+      });
+      tileCache.set(index, tile);
+      return tile;
+    }
+
+    function renderGrid() {
+      const start = Math.floor(viewport.scrollTop / 150);
+      const end = Math.min(count + 1, start + 3);
+      tiles.replaceChildren(...Array.from({ length: end - start }, (_, offset) => card(start + offset)));
+    }
+    viewport.addEventListener("scroll", renderGrid);
+    renderGrid();
+  </script>
+  <script src="../core.js"></script>
+  <script src="../modern-flow.js"></script>
+  <script src="../content.js"></script>
+  <script>
+    setTimeout(() => send(mode === "scan" ? { type: "FLOW_SCAN_PROJECT" } : { type: "FLOW_START_BATCH", quality }), 50);
+    const poll = setInterval(() => {
+      const state = send({ type: "FLOW_GET_STATUS" });
+      if (state) document.querySelector("#result").textContent = JSON.stringify(state);
+      if (!state || state.running) return;
+      if (mode === "retry" && state.failures.length && !retryStarted) {
+        retryStarted = true;
+        send({ type: "FLOW_RETRY_FAILURES" });
+        return;
+      }
+      clearInterval(poll);
+      const result = document.querySelector("#result");
+      result.textContent = JSON.stringify(state);
+      result.dataset.found = state.found;
+      result.dataset.success = state.success;
+      result.dataset.failed = state.failed;
+      result.dataset.legacyRequests = legacyRequests;
+      result.dataset.fetchRequests = fetchRequests;
+      result.dataset.wrongQuality = wrongQuality;
+      result.dataset.unrelatedClicks = unrelatedClicks;
+      result.dataset.lastError = state.lastError;
+      result.dataset.retryCorrect = retryStarted && state.success === 1
+        && attempts.get(failIndex) === 2
+        && [...attempts].every(([index, tries]) => index === failIndex || tries === 1);
+    }, 100);
+  </script>
+</body>
+</html>
