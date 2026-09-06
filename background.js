@@ -160,7 +160,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if ([...activeWatches.keys()].some((id) => id !== tabId)) {
         throw new Error("An export is already being monitored in another Flow tab. Finish or stop that job first.");
       }
-      activeWatches.set(tabId, { token: message.token, origin, startedAt: Date.now() });
+      activeWatches.set(tabId, {
+        token: message.token,
+        origin,
+        startedAt: Date.now(),
+        projectTitle: message.projectTitle || "",
+        subfolder: message.subfolder || "",
+        isCustom: Boolean(message.isCustom),
+      });
       return { ok: true };
     }));
   }
@@ -203,10 +210,48 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }));
   }
 
+  if (message?.type === "FLOW_GET_DOWNLOAD_HISTORY") {
+    return respond((async () => {
+      const items = await chrome.downloads.search({
+        state: "complete",
+        limit: 1500,
+        orderBy: ["-startTime"],
+      });
+      const filenames = items.map((item) => (item.filename || "").replace(/^.*[\\/]/, ""));
+      return { ok: true, filenames };
+    })());
+  }
+
+  if (message?.type === "FLOW_NOTIFY_COMPLETION") {
+    const title = message.title || "Flow Bulk Video Exporter";
+    const text = message.message || "Export complete.";
+    if (chrome.notifications?.create) {
+      chrome.notifications.create({
+        type: "basic",
+        iconUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAA0SURBVHhe7cExAQAAAMKg9U9tDQ8gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHwaNtcAAU2Lq3AAAAAASUVORK5CYII=",
+        title,
+        message: text,
+        priority: 2,
+      }, (notifId) => {
+        sendResponse({ ok: true, notifId });
+      });
+      return true;
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+
   if (message?.type === "FLOW_DIRECT_DOWNLOAD") {
+    let targetFilename = message.filename;
+    if (message.subfolder) {
+      const sub = message.isCustom
+        ? message.subfolder
+        : (message.subfolder.includes("/") ? message.subfolder : `Flow/${message.subfolder}`);
+      targetFilename = `${sub}/${message.filename}`;
+    }
     const options = {
       url: message.url,
-      filename: message.filename,
+      filename: targetFilename,
       conflictAction: "uniquify",
       saveAs: false,
     };
@@ -221,9 +266,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: "This video must be downloaded through its Flow menu." });
       return false;
     }
+    let targetFilename = message.filename;
+    if (message.subfolder) {
+      const sub = message.isCustom
+        ? message.subfolder
+        : (message.subfolder.includes("/") ? message.subfolder : `Flow/${message.subfolder}`);
+      targetFilename = `${sub}/${message.filename}`;
+    }
     chrome.downloads.download({
       url: mediaDownloadUrl(message.mediaId),
-      filename: message.filename,
+      filename: targetFilename,
       conflictAction: "uniquify",
       saveAs: false,
     })
@@ -301,3 +353,58 @@ chrome.downloads.onChanged.addListener((delta) => {
     }
   }).catch(() => undefined);
 });
+
+if (chrome.downloads?.onDeterminingFilename?.addListener) {
+  chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+    void withWatches(async () => {
+      try {
+        let organize = true;
+        if (chrome.storage?.local?.get) {
+          const settings = await chrome.storage.local.get(["organizeSubfolders"]).catch(() => ({}));
+          if (settings && settings.organizeSubfolders === false) organize = false;
+        }
+        if (!organize) {
+          suggest();
+          return;
+        }
+
+        let folder = "";
+        let isCustom = false;
+        for (const [, watch] of activeWatches) {
+          if (watch.downloadId === item.id || flowOrigin(item.url) === watch.origin || flowOrigin(item.referrer) === watch.origin
+            || (flowOrigin(item.url) === "google" && looksLikeVideoDownload(item))) {
+            folder = watch.subfolder || watch.projectTitle || "";
+            isCustom = Boolean(watch.isCustom);
+            break;
+          }
+        }
+
+        if (!folder && (flowOrigin(item.url) === "https://labs.google" || flowOrigin(item.url) === "https://flow.google.com" || looksLikeVideoDownload(item))) {
+          folder = "Flow_Export";
+        }
+
+        if (!folder) {
+          suggest();
+          return;
+        }
+
+        const cleanFolder = folder.replace(/\\/g, "/").split("/")
+          .map((p) => p.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim())
+          .filter(Boolean)
+          .join("/") || "Flow_Export";
+        const rawName = (item.filename || "").replace(/^.*[\\/]/, "");
+        if (!rawName) {
+          suggest();
+          return;
+        }
+        const targetPath = isCustom
+          ? `${cleanFolder}/${rawName}`
+          : (cleanFolder.includes("/") ? `${cleanFolder}/${rawName}` : `Flow/${cleanFolder}/${rawName}`);
+        suggest({ filename: targetPath, conflictAction: "uniquify" });
+      } catch {
+        suggest();
+      }
+    });
+    return true;
+  });
+}
