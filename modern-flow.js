@@ -25,19 +25,22 @@
     // These are the components served by Flow's Angular media-grid module.
     // Scope discovery to grid tiles, excluding editor previews and dialogs.
     for (const tile of document.querySelectorAll("flow-grid-tile-container")) {
-      const media = tile.querySelector("flow-video-tile");
+      const media = tile.querySelector("flow-video-tile") || tile.querySelector("video")?.parentElement;
       if (!media || !visible(media) || media.querySelector("flow-pending-tile, flow-error-tile")) continue;
       const thumbnail = media.querySelector("img.thumbnail, img");
       const video = media.querySelector("video");
-      const source = thumbnail?.getAttribute("src") || thumbnail?.currentSrc || video?.poster;
+      const source = thumbnail?.getAttribute("src") || thumbnail?.currentSrc || video?.poster || video?.src || video?.currentSrc;
       const explicitId = media.querySelector("[data-media-id]")?.getAttribute("data-media-id");
-      // Never identify videos by title: multiple generations may share a prompt.
-      const mediaId = explicitId ? `flow-media:${explicitId}` : thumbnailKey(source, baseUrl);
+      const ariaLabel = tile.getAttribute("aria-label");
+      const thumbKey = thumbnailKey(source, baseUrl);
+      const mediaId = explicitId ? `flow-media:${explicitId}` : (thumbKey || (ariaLabel ? `flow-label:${ariaLabel}` : ""));
       if (!mediaId || cards.has(mediaId)) continue;
       cards.set(mediaId, {
         mediaId,
         title: Core.compactText(tile.getAttribute("aria-label")
-          || tile.querySelector("flow-editable-text")?.textContent),
+          || tile.querySelector("flow-editable-text")?.textContent
+          || tile.querySelector("[aria-label*='.mp4' i]")?.getAttribute("aria-label")
+          || [...tile.querySelectorAll("*")].find((el) => /\.mp4\b/i.test(el.textContent))?.textContent),
         tile,
         surface: media,
         video,
