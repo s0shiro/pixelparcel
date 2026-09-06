@@ -13,27 +13,46 @@ const projectId = "11111111-1111-4111-8111-111111111111";
 function worker({ fetch = async () => { throw new Error("Unexpected fetch"); }, storage = {} } = {}) {
   const listeners = {};
   const sent = [];
+  const notifications = [];
   const downloads = new Map();
   const context = vm.createContext({
     URL, AbortSignal, fetch,
     chrome: {
       runtime: { id: "exporter", onMessage: { addListener: (fn) => { listeners.message = fn; } } },
-      storage: { session: {
-        async get(key) { return { [key]: structuredClone(storage[key]) }; },
-        async set(values) { Object.assign(storage, structuredClone(values)); },
-      } },
+      storage: {
+        session: {
+          async get(key) { return { [key]: structuredClone(storage[key]) }; },
+          async set(values) { Object.assign(storage, structuredClone(values)); },
+        },
+        local: {
+          async get(key) { return { [key]: structuredClone(storage[key]) }; },
+          async set(values) { Object.assign(storage, structuredClone(values)); },
+        },
+      },
+      notifications: {
+        create(options, callback) {
+          notifications.push(options);
+          callback?.("notif-1");
+        },
+      },
       tabs: { async sendMessage(tabId, message) { sent.push({ tabId, ...message }); } },
       downloads: {
         async download() { return 10; },
-        async search(query = {}) { if (query.id !== undefined) return downloads.has(query.id) ? [downloads.get(query.id)] : []; return [...downloads.values()]; },
+        async search(query = {}) {
+          let list = [...downloads.values()];
+          if (query.id !== undefined) list = list.filter((d) => d.id === query.id);
+          if (query.state !== undefined) list = list.filter((d) => d.state === query.state);
+          return list;
+        },
         onCreated: { addListener: (fn) => { listeners.created = fn; } },
         onChanged: { addListener: (fn) => { listeners.changed = fn; } },
+        onDeterminingFilename: { addListener: (fn) => { listeners.determiningFilename = fn; } },
       },
     },
   });
   vm.runInContext(source, context);
   return {
-    sent, downloads, storage,
+    sent, downloads, storage, notifications, listeners,
     send(message, sender = modernSender) {
       return new Promise((resolve) => {
         const async = listeners.message(message, sender, resolve);
@@ -152,4 +171,63 @@ test("check download watch detects completed download via polling", async () => 
   assert.equal(w.sent.length, 1);
   assert.equal(w.sent[0].type, "FLOW_DOWNLOAD_DETECTED");
   assert.equal(w.sent[0].token, "poll-token");
+});
+
+test("returns completed download history for deduplication", async () => {
+  const w = worker();
+  w.downloads.set(1, { id: 1, state: "complete", filename: "/home/user/Downloads/EP01_Scene1.mp4" });
+  w.downloads.set(2, { id: 2, state: "interrupted", filename: "/home/user/Downloads/EP02_Failed.mp4" });
+  const result = await w.send({ type: "FLOW_GET_DOWNLOAD_HISTORY" });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.filenames, ["EP01_Scene1.mp4"]);
+});
+
+test("triggers desktop notification on completion", async () => {
+  const w = worker();
+  const res = await w.send({
+    type: "FLOW_NOTIFY_COMPLETION",
+    title: "Flow Export Complete",
+    message: "16 downloaded, 0 failed.",
+  });
+  assert.equal(res.ok, true);
+  assert.equal(w.notifications.length, 1);
+  assert.equal(w.notifications[0].title, "Flow Export Complete");
+  assert.equal(w.notifications[0].message, "16 downloaded, 0 failed.");
+});
+
+test("routes downloads to Flow project subfolder when determining filename", async () => {
+  const w = worker();
+  await w.send({
+    type: "FLOW_WATCH_DOWNLOAD",
+    token: "token-folder",
+    subfolder: "Korean_Drama_EP02",
+  });
+  let suggested = null;
+  w.listeners.determiningFilename(
+    { id: 99, url: "blob:https://flow.google.com/test", filename: "Shot1.mp4" },
+    (result) => { suggested = result; },
+  );
+  await new Promise(setImmediate);
+  assert.ok(suggested);
+  assert.equal(suggested.filename, "Flow/Korean_Drama_EP02/Shot1.mp4");
+  assert.equal(suggested.conflictAction, "uniquify");
+});
+
+test("routes downloads to custom subfolder path when isCustom is true", async () => {
+  const w = worker();
+  await w.send({
+    type: "FLOW_WATCH_DOWNLOAD",
+    token: "token-custom",
+    subfolder: "MyDrama/Episodes",
+    isCustom: true,
+  });
+  let suggested = null;
+  w.listeners.determiningFilename(
+    { id: 101, url: "blob:https://flow.google.com/test", filename: "Shot2.mp4" },
+    (result) => { suggested = result; },
+  );
+  await new Promise(setImmediate);
+  assert.ok(suggested);
+  assert.equal(suggested.filename, "MyDrama/Episodes/Shot2.mp4");
+  assert.equal(suggested.conflictAction, "uniquify");
 });

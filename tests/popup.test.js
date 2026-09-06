@@ -65,6 +65,16 @@ async function openPopup(tab, options = {}) {
           return model.status || { running: false, found: 23, failures: [], mode: "Idle" };
         },
       },
+      storage: {
+        local: {
+          async get() {
+            return model.storage || {};
+          },
+          async set(values) {
+            model.storage = { ...model.storage, ...values };
+          },
+        },
+      },
     },
     setInterval(callback) { poll = callback; },
   });
@@ -193,6 +203,7 @@ test("copies diagnostic logs to clipboard with failure details and activity logs
 
 test("manifest grants click access and injects on every supported Flow route", () => {
   assert.ok(manifest.permissions.includes("activeTab"));
+  assert.ok(manifest.permissions.includes("notifications"));
   assert.ok(manifest.host_permissions.includes("https://flow.google.com/*"));
   const matches = manifest.content_scripts.flatMap((script) => script.matches);
   for (const url of [
@@ -208,4 +219,53 @@ test("manifest grants click access and injects on every supported Flow route", (
     }), url);
   }
   assert.match(source("popup.html"), /<script src="core.js"><\/script>\s*<script src="popup.js"><\/script>/);
+});
+
+test("popup displays live timing statistics and passes options in batch requests", async () => {
+  const popup = await openPopup(
+    { id: 42, url: "https://flow.google.com/project/example" },
+    {
+      status: {
+        running: true,
+        mode: "1080p upscale",
+        message: "1080p: processing video 2/10…",
+        found: 10,
+        processed: 2,
+        success: 2,
+        failed: 0,
+        skipped: 1,
+        elapsed: "01:15",
+        eta: "04:30",
+        speed: "35s/item",
+        failures: [],
+      },
+    },
+  );
+
+  assert.equal(popup.get("#elapsed-time").textContent, "01:15");
+  assert.equal(popup.get("#eta-time").textContent, "04:30");
+  assert.equal(popup.get("#speed-stat").textContent, "35s/item");
+  assert.equal(popup.get("#skipped-count").textContent, 1);
+
+  // Set filter and custom folder
+  popup.get("#filter-input").value = "EP02";
+  popup.get("#custom-folder-input").value = "Drama/Season1";
+  await popup.get("#custom-folder-input").listeners.input();
+  assert.equal(popup.model.storage?.customFolder, "Drama/Season1");
+
+  await popup.get("#download-1080-button").listeners.click();
+
+  const batchMsg = popup.messages.find((m) => m.type === "FLOW_START_BATCH");
+  assert.ok(batchMsg);
+  assert.equal(batchMsg.quality, "1080p");
+  assert.equal(batchMsg.filter, "EP02");
+  assert.equal(batchMsg.customFolder, "Drama/Season1");
+  assert.equal(batchMsg.skipDownloaded, true);
+  assert.equal(batchMsg.organizeSubfolders, true);
+  assert.equal(batchMsg.soundNotifications, true);
+
+  // Reset custom folder
+  await popup.get("#custom-folder-reset").listeners.click();
+  assert.equal(popup.get("#custom-folder-input").value, "");
+  assert.equal(popup.model.storage?.customFolder, "");
 });
