@@ -11,7 +11,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function flowOrigin(value) {
   try {
     const url = new URL(value);
-    return ["https://labs.google", "https://flow.google.com"].includes(url.origin) ? url.origin : "";
+    if (["https://labs.google", "https://flow.google.com"].includes(url.origin)) return url.origin;
+    if (url.hostname.endsWith(".google.com") || url.hostname.endsWith(".googleapis.com") || url.hostname.endsWith(".googleusercontent.com")) {
+      return "google";
+    }
+    return "";
   } catch {
     return "";
   }
@@ -170,6 +174,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }));
   }
 
+  if (message?.type === "FLOW_CHECK_DOWNLOAD_WATCH") {
+    const tabId = sender.tab?.id;
+    return respond(withWatches(async () => {
+      const watch = activeWatches.get(tabId);
+      if (!watch || watch.token !== message.token) return { ok: true, active: false };
+      const recent = await chrome.downloads.search({
+        limit: 10,
+        orderBy: ["-startTime"],
+      });
+      for (const item of recent) {
+        if (item.byExtensionId) continue;
+        const itemTime = new Date(item.startTime || 0).getTime();
+        if (itemTime < watch.startedAt - 2000) continue;
+        const sameOrigin = flowOrigin(item.url) === watch.origin || flowOrigin(item.referrer) === watch.origin
+          || (flowOrigin(item.url) === "google" && looksLikeVideoDownload(item));
+        if (!sameOrigin) continue;
+        if (item.mime && !/^video\//i.test(item.mime) && item.mime !== "application/octet-stream") continue;
+        if (!item.url?.startsWith("blob:") && !looksLikeVideoDownload(item)) continue;
+
+        if (item.state === "complete" || item.state === "interrupted") {
+          watch.downloadId = item.id;
+          await finishWatchedDownload(tabId, watch, item);
+          return { ok: true, matched: true, state: item.state };
+        }
+      }
+      return { ok: true, matched: false };
+    }));
+  }
+
   if (message?.type === "FLOW_DIRECT_DOWNLOAD") {
     const options = {
       url: message.url,
@@ -231,7 +264,8 @@ chrome.downloads.onCreated.addListener((item) => {
   void withWatches(async () => {
     for (const [tabId, watch] of activeWatches) {
       if (watch.downloadId !== undefined) continue;
-      const sameOrigin = flowOrigin(item.url) === watch.origin || flowOrigin(item.referrer) === watch.origin;
+      const sameOrigin = flowOrigin(item.url) === watch.origin || flowOrigin(item.referrer) === watch.origin
+        || (flowOrigin(item.url) === "google" && looksLikeVideoDownload(item));
       if (!sameOrigin || (item.mime && !/^video\//i.test(item.mime)
         && item.mime !== "application/octet-stream")) continue;
       if (!item.url?.startsWith("blob:") && !looksLikeVideoDownload(item)) continue;
@@ -246,12 +280,24 @@ chrome.downloads.onCreated.addListener((item) => {
 chrome.downloads.onChanged.addListener((delta) => {
   if (!["complete", "interrupted"].includes(delta.state?.current)) return;
   void withWatches(async () => {
+    const [item] = await chrome.downloads.search({ id: delta.id });
+    if (item?.byExtensionId) return;
+
     for (const [tabId, watch] of activeWatches) {
-      if (watch.downloadId !== delta.id) continue;
-      const [item] = await chrome.downloads.search({ id: delta.id });
+      if (watch.downloadId !== undefined && watch.downloadId !== delta.id) continue;
+      if (watch.downloadId === undefined) {
+        if (!item) continue;
+        const sameOrigin = flowOrigin(item.url) === watch.origin || flowOrigin(item.referrer) === watch.origin
+          || (flowOrigin(item.url) === "google" && looksLikeVideoDownload(item));
+        if (!sameOrigin) continue;
+        if (item.mime && !/^video\//i.test(item.mime) && item.mime !== "application/octet-stream") continue;
+        if (!item.url?.startsWith("blob:") && !looksLikeVideoDownload(item)) continue;
+        watch.downloadId = item.id;
+      }
       await finishWatchedDownload(tabId, watch, item || {
         id: delta.id, state: delta.state.current, error: delta.error?.current,
       });
+      break;
     }
   }).catch(() => undefined);
 });
