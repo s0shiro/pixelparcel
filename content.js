@@ -25,7 +25,6 @@
     processed: 0,
     success: 0,
     failed: 0,
-    skipped: 0,
     startTime: null,
     elapsed: "00:00",
     eta: "--:--",
@@ -40,7 +39,15 @@
   let inventoryCache = null;
   let modernInventoryCache = null;
   let activeSubfolder = "";
-  let activeIsCustomFolder = false;
+  const selectedMediaIds = new Set();
+  let lastSelectedMediaId = null;
+  const selectionButtons = new Map();
+  const selectionButtonCards = new WeakMap();
+  const tileMediaIds = new WeakMap();
+  let tileSelectionAnchors = new WeakMap();
+  let selectionLayer = null;
+  let selectionListenersAttached = false;
+  let selectionUpdateScheduled = false;
   const activityLogs = [];
 
   function log(message) {
@@ -49,6 +56,17 @@
     activityLogs.push(entry);
     if (activityLogs.length > 300) activityLogs.shift();
     console.log(`[FlowExporter] ${message}`);
+  }
+
+  function sendRuntimeMessage(message) {
+    try {
+      return Promise.resolve(chrome.runtime.sendMessage(message));
+    } catch (error) {
+      // Chrome throws synchronously when this tab still has an older content
+      // script after the extension has been reloaded. Returning a rejected
+      // Promise lets every existing catch/await path handle it normally.
+      return Promise.reject(error);
+    }
   }
 
   function getProjectTitle() {
@@ -100,12 +118,424 @@
 
   async function notifyCompletion(title, message) {
     try {
-      await chrome.runtime.sendMessage({
+      await sendRuntimeMessage({
         type: "FLOW_NOTIFY_COMPLETION",
         title,
         message,
       });
     } catch {}
+  }
+
+  function ensureGridSelectionStyles() {
+    if (typeof document === "undefined" || !document.head || document.getElementById("flow-bulk-exporter-grid-styles")) return;
+    const style = document.createElement("style");
+    style.id = "flow-bulk-exporter-grid-styles";
+    style.textContent = `
+      .flow-exporter-select-btn {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.45);
+        background: rgba(16, 17, 20, 0.8);
+        backdrop-filter: blur(4px);
+        cursor: pointer;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+        box-sizing: border-box;
+        padding: 0;
+        outline: none;
+        user-select: none;
+        -webkit-user-select: none;
+        touch-action: none;
+        pointer-events: auto;
+      }
+      .flow-exporter-select-btn:hover {
+        transform: scale(1.12);
+        border-color: #a894ff;
+        background: rgba(24, 26, 32, 0.95);
+        box-shadow: 0 0 8px rgba(139, 108, 255, 0.5);
+      }
+      .flow-exporter-select-btn.selected {
+        background: #7f62f4;
+        border-color: #ffffff;
+        box-shadow: 0 0 10px rgba(127, 98, 244, 0.8);
+      }
+      .flow-exporter-select-btn svg {
+        width: 13px;
+        height: 13px;
+        fill: none;
+        stroke: #ffffff;
+        stroke-width: 2.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 120ms ease;
+      }
+      .flow-exporter-select-btn.selected svg {
+        opacity: 1;
+      }
+      .flow-exporter-selection-layer {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483646;
+        pointer-events: none;
+        overflow: hidden;
+      }
+      .flow-exporter-dock {
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(16, 18, 24, 0.94);
+        backdrop-filter: blur(14px);
+        border: 1px solid #353b47;
+        border-radius: 30px;
+        padding: 6px 14px 6px 18px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        z-index: 100000;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6), 0 0 20px rgba(139, 108, 255, 0.25);
+        font-family: "DM Sans", system-ui, -apple-system, sans-serif;
+        color: #f5f7fb;
+        animation: flowDockSlideUp 200ms cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      @keyframes flowDockSlideUp {
+        from { opacity: 0; transform: translate(-50%, 15px); }
+        to { opacity: 1; transform: translate(-50%, 0); }
+      }
+      .flow-exporter-dock-count {
+        font-size: 13px;
+        font-weight: 700;
+        color: #a894ff;
+        white-space: nowrap;
+      }
+      .flow-exporter-dock-btn {
+        border: 0;
+        border-radius: 20px;
+        padding: 6px 14px;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 120ms ease;
+        white-space: nowrap;
+        outline: none;
+      }
+      .flow-exporter-dock-btn.primary {
+        background: #f5f7fb;
+        color: #111318;
+      }
+      .flow-exporter-dock-btn.primary:hover {
+        background: #ffffff;
+        transform: translateY(-1px);
+      }
+      .flow-exporter-dock-btn.upscale {
+        background: linear-gradient(90deg, #8b6cff, #63a8ff);
+        color: #ffffff;
+      }
+      .flow-exporter-dock-btn.upscale:hover {
+        filter: brightness(1.1);
+        transform: translateY(-1px);
+      }
+      .flow-exporter-dock-btn.clear {
+        background: transparent;
+        color: #8c93a3;
+        padding: 6px 10px;
+      }
+      .flow-exporter-dock-btn.clear:hover {
+        color: #ffb5bd;
+      }
+    `;
+    document.head.append(style);
+  }
+
+  function updateFloatingDock() {
+    if (typeof document === "undefined" || !document.body) return;
+    let dock = document.getElementById("flow-exporter-dock");
+    if (selectedMediaIds.size === 0) {
+      if (dock) dock.remove();
+      return;
+    }
+
+    if (!dock) {
+      dock = document.createElement("div");
+      dock.id = "flow-exporter-dock";
+      dock.className = "flow-exporter-dock";
+      document.body.append(dock);
+    }
+
+    const count = selectedMediaIds.size;
+    dock.replaceChildren();
+
+    const countSpan = document.createElement("span");
+    countSpan.className = "flow-exporter-dock-count";
+    countSpan.textContent = `${count} selected`;
+
+    const btn720 = document.createElement("button");
+    btn720.className = "flow-exporter-dock-btn primary";
+    btn720.type = "button";
+    btn720.textContent = "Download 720p";
+    btn720.onclick = () => {
+      void runBatch("720p", null, { selectedMediaIds: [...selectedMediaIds] });
+    };
+
+    const btn1080 = document.createElement("button");
+    btn1080.className = "flow-exporter-dock-btn upscale";
+    btn1080.type = "button";
+    btn1080.textContent = "Upscale 1080p";
+    btn1080.onclick = () => {
+      void runBatch("1080p", null, { selectedMediaIds: [...selectedMediaIds] });
+    };
+
+    const btnClear = document.createElement("button");
+    btnClear.className = "flow-exporter-dock-btn clear";
+    btnClear.type = "button";
+    btnClear.textContent = "Clear";
+    btnClear.onclick = () => {
+      selectedMediaIds.clear();
+      lastSelectedMediaId = null;
+      tileSelectionAnchors = new WeakMap();
+      updateAllDecoratedButtons();
+      updateFloatingDock();
+    };
+
+    dock.append(countSpan, btn720, btn1080, btnClear);
+  }
+
+  function updateAllDecoratedButtons() {
+    if (typeof document === "undefined") return;
+    for (const btn of document.querySelectorAll(".flow-exporter-select-btn")) {
+      const mediaId = btn.dataset.mediaId;
+      const isSelected = selectedMediaIds.has(mediaId);
+      btn.classList.toggle("selected", isSelected);
+      btn.setAttribute("aria-pressed", String(isSelected));
+    }
+  }
+
+  function ensureSelectionLayer() {
+    if (selectionLayer?.isConnected) return selectionLayer;
+    selectionLayer = document.createElement("div");
+    selectionLayer.id = "flow-exporter-selection-layer";
+    selectionLayer.className = "flow-exporter-selection-layer";
+    selectionLayer.setAttribute("aria-label", "Flow Bulk Video Exporter selection controls");
+    document.body.append(selectionLayer);
+    selectionButtons.clear();
+    return selectionLayer;
+  }
+
+  function stopSelectionEvent(event) {
+    if (event.cancelable) event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+  }
+
+  function createSelectionButton(mediaId) {
+    const btn = document.createElement("button");
+    btn.className = "flow-exporter-select-btn";
+    btn.type = "button";
+    btn.dataset.mediaId = mediaId;
+    btn.setAttribute("aria-label", "Select video for export");
+    btn.setAttribute("title", "Select video for export (Shift+Click for range)");
+    btn.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+
+    let suppressClickUntil = 0;
+    for (const eventName of [
+      "pointerdown",
+      "pointercancel",
+      "mousedown",
+      "mouseup",
+      "touchstart",
+      "touchend",
+      "dblclick",
+      "contextmenu",
+    ]) {
+      btn.addEventListener(eventName, stopSelectionEvent, { capture: true, passive: false });
+    }
+    btn.addEventListener("pointerup", (event) => {
+      const currentMediaId = btn.dataset.mediaId;
+      const isPrimaryPointer = event.button === undefined || event.button === 0;
+      const isShift = event.shiftKey;
+      stopSelectionEvent(event);
+      if (!isPrimaryPointer) return;
+      suppressClickUntil = Date.now() + 500;
+      toggleCardSelection(selectionButtonCards.get(btn) || { mediaId: currentMediaId }, isShift);
+    }, { capture: true });
+    btn.addEventListener("click", (event) => {
+      const currentMediaId = btn.dataset.mediaId;
+      const isShift = event.shiftKey;
+      stopSelectionEvent(event);
+      // Pointer activation was handled on pointerup so a card can never see
+      // the gesture. Keyboard and assistive-technology clicks still arrive here.
+      if (Date.now() < suppressClickUntil) return;
+      toggleCardSelection(selectionButtonCards.get(btn) || { mediaId: currentMediaId }, isShift);
+    }, { capture: true });
+    return btn;
+  }
+
+  function scheduleGridDecoration() {
+    if (selectionUpdateScheduled) return;
+    selectionUpdateScheduled = true;
+    const schedule = typeof requestAnimationFrame === "function"
+      ? requestAnimationFrame
+      : (callback) => setTimeout(callback, 0);
+    schedule(() => {
+      selectionUpdateScheduled = false;
+      decorateGridTiles();
+    });
+  }
+
+  function visibleTileRect(tile) {
+    const original = tile.getBoundingClientRect();
+    const rect = {
+      top: Math.max(0, original.top),
+      left: Math.max(0, original.left),
+      right: Math.min(window.innerWidth, original.right),
+      bottom: Math.min(window.innerHeight, original.bottom),
+    };
+    for (let current = tile.parentElement; current && current !== document.body; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (!/(?:auto|scroll|hidden|clip)/.test(`${style.overflow} ${style.overflowX} ${style.overflowY}`)) continue;
+      const clip = current.getBoundingClientRect();
+      rect.top = Math.max(rect.top, clip.top);
+      rect.left = Math.max(rect.left, clip.left);
+      rect.right = Math.min(rect.right, clip.right);
+      rect.bottom = Math.min(rect.bottom, clip.bottom);
+    }
+    return {
+      ...rect,
+      original,
+      width: Math.max(0, rect.right - rect.left),
+      height: Math.max(0, rect.bottom - rect.top),
+    };
+  }
+
+  function toggleCardSelection(card, isShift = false) {
+    if (!card?.mediaId) return;
+    const mediaId = card.mediaId;
+
+    if (isShift && lastSelectedMediaId && modernInventoryCache?.videos) {
+      const videos = modernInventoryCache.videos;
+      const idx1 = videos.findIndex((v) => v.mediaId === lastSelectedMediaId);
+      const idx2 = videos.findIndex((v) => v.mediaId === mediaId);
+      if (idx1 !== -1 && idx2 !== -1) {
+        const start = Math.min(idx1, idx2);
+        const end = Math.max(idx1, idx2);
+        const shouldSelect = !selectedMediaIds.has(mediaId);
+        for (let i = start; i <= end; i += 1) {
+          if (shouldSelect) selectedMediaIds.add(videos[i].mediaId);
+          else selectedMediaIds.delete(videos[i].mediaId);
+        }
+        if (card.tile) {
+          if (shouldSelect) tileSelectionAnchors.set(card.tile, { mediaId, title: card.title || "", selectedAt: Date.now() });
+          else tileSelectionAnchors.delete(card.tile);
+        }
+      }
+    } else {
+      if (selectedMediaIds.has(mediaId)) {
+        selectedMediaIds.delete(mediaId);
+        if (card.tile) tileSelectionAnchors.delete(card.tile);
+      } else {
+        selectedMediaIds.add(mediaId);
+        if (card.tile) tileSelectionAnchors.set(card.tile, { mediaId, title: card.title || "", selectedAt: Date.now() });
+      }
+      lastSelectedMediaId = mediaId;
+    }
+
+    updateAllDecoratedButtons();
+    updateFloatingDock();
+  }
+
+  function identityStrength(mediaId) {
+    if (mediaId?.startsWith("flow-media:")) return 3;
+    if (mediaId?.startsWith("flow-tile:")) return 2;
+    if (mediaId?.startsWith("flow-label:")) return 1;
+    return 0;
+  }
+
+  function reconcileLoadedCardIdentity(card) {
+    const previousMediaId = tileMediaIds.get(card.tile);
+    tileMediaIds.set(card.tile, card.mediaId);
+    if (!previousMediaId || previousMediaId === card.mediaId) return;
+    if (!selectedMediaIds.has(previousMediaId)) return;
+    const anchor = tileSelectionAnchors.get(card.tile);
+    const recentClickOnSameCard = anchor?.mediaId === previousMediaId
+      && Date.now() - anchor.selectedAt < 15_000
+      && (!anchor.title || !card.title || anchor.title === card.title);
+    if (!recentClickOnSameCard && identityStrength(card.mediaId) <= identityStrength(previousMediaId)) return;
+
+    selectedMediaIds.delete(previousMediaId);
+    selectedMediaIds.add(card.mediaId);
+    if (recentClickOnSameCard) {
+      tileSelectionAnchors.set(card.tile, { ...anchor, mediaId: card.mediaId });
+    }
+    if (lastSelectedMediaId === previousMediaId) lastSelectedMediaId = card.mediaId;
+    for (const video of modernInventoryCache?.videos || []) {
+      if (video.mediaId === previousMediaId) video.mediaId = card.mediaId;
+    }
+    log(`Updated selected video identity after Flow finished loading its card.`);
+  }
+
+  function decorateGridTiles() {
+    if (!usesModernFlow() || typeof document === "undefined") return;
+    ensureGridSelectionStyles();
+    const layer = ensureSelectionLayer();
+    layer.hidden = state.running;
+    if (state.running) return;
+    if (!selectionListenersAttached) {
+      document.addEventListener("scroll", () => {
+        tileSelectionAnchors = new WeakMap();
+        scheduleGridDecoration();
+      }, { capture: true, passive: true });
+      window.addEventListener("resize", scheduleGridDecoration, { passive: true });
+      selectionListenersAttached = true;
+    }
+
+    // Remove controls injected by an older content-script instance. Keeping
+    // controls outside Flow's tiles prevents the app's pointer handlers from
+    // treating a selection click as a request to play the video.
+    for (const stale of document.querySelectorAll(".flow-exporter-select-btn")) {
+      if (stale.parentElement !== layer) stale.remove();
+    }
+
+    const cards = Modern.videoCards(document, location.href, () => true);
+    const visibleIds = new Set();
+    for (const card of cards) {
+      if (!card.tile) continue;
+      const rect = visibleTileRect(card.tile);
+      if (rect.width < 28 || rect.height < 28) continue;
+
+      reconcileLoadedCardIdentity(card);
+
+      visibleIds.add(card.mediaId);
+      let btn = selectionButtons.get(card.mediaId);
+      if (!btn) {
+        btn = createSelectionButton(card.mediaId);
+        selectionButtons.set(card.mediaId, btn);
+        layer.append(btn);
+      }
+      btn.dataset.mediaId = card.mediaId;
+      selectionButtonCards.set(btn, card);
+      btn.style.left = `${Math.round(Math.max(rect.left + 4, rect.original.left + 8))}px`;
+      btn.style.top = `${Math.round(Math.max(rect.top + 4, rect.original.top + 8))}px`;
+      const isSelected = selectedMediaIds.has(card.mediaId);
+      btn.classList.toggle("selected", isSelected);
+      btn.setAttribute("aria-pressed", String(isSelected));
+      btn.setAttribute("aria-label", `${isSelected ? "Deselect" : "Select"} ${card.title || "video"} for export`);
+    }
+
+    for (const [mediaId, btn] of selectionButtons) {
+      if (visibleIds.has(mediaId)) continue;
+      btn.remove();
+      selectionButtons.delete(mediaId);
+    }
   }
 
   function snapshotState() {
@@ -304,7 +734,7 @@
     for (let offset = 0; offset < items.length && !state.stopRequested; offset += 40) {
       const batch = items.slice(offset, offset + 40);
       state.message = `Checking media types ${Math.min(offset + batch.length, items.length)}/${items.length}…`;
-      const response = await chrome.runtime.sendMessage({
+      const response = await sendRuntimeMessage({
         type: "FLOW_CLASSIFY_MEDIA_IDS",
         mediaIds: batch.map((item) => item.mediaId),
       }).catch(() => ({ ok: false, types: {} }));
@@ -319,7 +749,7 @@
     if (!force && inventoryCache?.projectId === projectId) return inventoryCache.videos;
 
     state.message = "Reading the complete Flow project inventory…";
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendRuntimeMessage({
       type: "FLOW_FETCH_PROJECT",
       projectId,
     });
@@ -767,14 +1197,10 @@
       }, timeoutMs);
     }).finally(() => clearTimeout(timer));
 
-    const projectTitle = getProjectTitle();
-    const subfolder = activeSubfolder || Core.sanitizeFolder(projectTitle);
-    const ready = chrome.runtime.sendMessage({
+    const ready = sendRuntimeMessage({
       type: "FLOW_WATCH_DOWNLOAD",
       token,
-      projectTitle,
-      subfolder,
-      isCustom: activeIsCustomFolder,
+      subfolder: activeSubfolder,
     }).catch(() => ({ ok: false }));
     return { promise, ready };
   }
@@ -784,7 +1210,7 @@
       pendingDownload.resolve({ kind: "cancelled" });
       pendingDownload = null;
     }
-    chrome.runtime.sendMessage({ type: "FLOW_CANCEL_DOWNLOAD_WATCH", token }).catch(() => undefined);
+    void sendRuntimeMessage({ type: "FLOW_CANCEL_DOWNLOAD_WATCH", token }).catch(() => undefined);
   }
 
   async function waitForNewMedia(baselineMediaIds, baselineVideoKeys, timeoutMs) {
@@ -806,16 +1232,12 @@
     const url = videoSource(video);
     if (!url) throw new Error("Flow produced the upscale, but its video URL was not available.");
 
-    const projectTitle = getProjectTitle();
-    const subfolder = activeSubfolder || Core.sanitizeFolder(projectTitle);
-
     if (!url.startsWith("blob:")) {
-      const response = await chrome.runtime.sendMessage({
+      const response = await sendRuntimeMessage({
         type: "FLOW_DIRECT_DOWNLOAD",
         url,
         filename,
-        subfolder,
-        isCustom: activeIsCustomFolder,
+        subfolder: activeSubfolder,
       });
       if (response?.ok) return true;
     }
@@ -831,14 +1253,11 @@
   }
 
   async function directDownloadMediaId(mediaId, filename) {
-    const projectTitle = getProjectTitle();
-    const subfolder = activeSubfolder || Core.sanitizeFolder(projectTitle);
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendRuntimeMessage({
       type: "FLOW_DOWNLOAD_MEDIA",
       mediaId,
       filename,
-      subfolder,
-      isCustom: activeIsCustomFolder,
+      subfolder: activeSubfolder,
     });
     if (!response?.ok) throw new Error(response?.error || "Chrome could not start the Flow download.");
     await waitForDownloadCompletion(response.downloadId);
@@ -848,7 +1267,7 @@
   async function waitForDownloadCompletion(downloadId) {
     const deadline = Date.now() + DOWNLOAD_TIMEOUT["720p"];
     while (!state.stopRequested && Date.now() < deadline) {
-      const result = await chrome.runtime.sendMessage({ type: "FLOW_DOWNLOAD_STATUS", downloadId });
+      const result = await sendRuntimeMessage({ type: "FLOW_DOWNLOAD_STATUS", downloadId });
       if (!result?.ok) throw new Error(result?.error || "Chrome could not check the download.");
       if (result.state === "complete") return;
       if (result.state === "interrupted") throw new Error(`Download interrupted: ${result.error || "unknown error"}. Retry this video.`);
@@ -975,7 +1394,7 @@
 
           if (Date.now() - lastCheckTime > 2_000) {
             lastCheckTime = Date.now();
-            const check = await chrome.runtime.sendMessage({
+            const check = await sendRuntimeMessage({
               type: "FLOW_CHECK_DOWNLOAD_WATCH",
               token,
             }).catch(() => null);
@@ -1028,7 +1447,7 @@
         const result = await Promise.race([downloadWatch.promise, watcher]);
         if (result.kind === "download") {
           log(`[#${index}] Download confirmed successfully.`);
-          return;
+          return { filename: result.filename || "" };
         }
         throw new Error(result.message || "Download failed.");
       } finally {
@@ -1040,7 +1459,7 @@
 
     if (quality === "720p") {
       const result = await downloadWatch.promise;
-      if (result.kind === "download") return;
+      if (result.kind === "download") return { filename: result.filename || "" };
       const failure = visibleFailureMessage();
       cancelDownloadWatch(token);
       throw new Error(result.message || failure || "Flow did not complete the 720p download within 90 seconds.");
@@ -1057,26 +1476,22 @@
       waitForUpscaleFailure(DOWNLOAD_TIMEOUT[quality]),
     ]);
 
-    if (result.kind === "download") return;
+    if (result.kind === "download") return { filename: result.filename || "" };
     if (result.kind === "flow-failure" || result.kind === "download-failure") {
       cancelDownloadWatch(token);
       throw new Error(result.message);
     }
     if (result.kind === "new-media" && result.newMedia?.kind === "media-id") {
       cancelDownloadWatch(token);
-      await directDownloadMediaId(
-        result.newMedia.mediaId,
-        mediaLabel(surface, index, quality, title),
-      );
-      return;
+      const label = mediaLabel(surface, index, quality, title);
+      await directDownloadMediaId(result.newMedia.mediaId, label);
+      return { filename: label };
     }
     if (result.kind === "new-media" && result.newMedia?.kind === "video") {
       cancelDownloadWatch(token);
-      await directDownloadVideo(
-        result.newMedia.video,
-        mediaLabel(surface, index, quality, title),
-      );
-      return;
+      const label = mediaLabel(surface, index, quality, title);
+      await directDownloadVideo(result.newMedia.video, label);
+      return { filename: label };
     }
 
     const failure = visibleFailureMessage();
@@ -1406,7 +1821,6 @@
       processed: 0,
       success: 0,
       failed: 0,
-      skipped: 0,
       startTime: mode === "Scan" ? null : Date.now(),
       elapsed: "00:00",
       eta: "--:--",
@@ -1430,19 +1844,6 @@
       state.eta = Core.formatDuration(avgMs * remainingCount);
       state.speed = `${Math.round(avgMs / 1000)}s/item`;
     }
-  }
-
-  function isAlreadyDownloaded(video, existingFilenames) {
-    if (!existingFilenames?.length) return false;
-    const title = (video?.title || "").trim();
-    if (!title || title.length < 3) return false;
-    const safeTitle = Core.safeFilename(title, "");
-    if (!safeTitle) return false;
-    const lowerSafe = safeTitle.toLowerCase();
-    return existingFilenames.some((name) => {
-      const lowerName = name.toLowerCase();
-      return lowerName.startsWith(lowerSafe) || lowerName.includes(lowerSafe);
-    });
   }
 
   async function scanProject() {
@@ -1470,15 +1871,22 @@
 
   async function runBatch(quality, requestedFailures = null, options = {}) {
     if (state.running) return;
-    if (options.customFolder) {
-      activeSubfolder = Core.sanitizeFolderPath(options.customFolder, "Flow_Export");
-      activeIsCustomFolder = true;
-    } else {
-      activeSubfolder = Core.sanitizeFolder(getProjectTitle());
-      activeIsCustomFolder = false;
+    let organizeSubfolders = options.organizeSubfolders;
+    let customFolder = options.customFolder;
+    if (organizeSubfolders === undefined || customFolder === undefined) {
+      try {
+        const saved = await chrome.storage.local.get(["organizeSubfolders", "customFolder"]);
+        if (organizeSubfolders === undefined) organizeSubfolders = saved?.organizeSubfolders;
+        if (customFolder === undefined) customFolder = saved?.customFolder;
+      } catch {}
     }
+    if (state.running) return;
+    activeSubfolder = organizeSubfolders === false
+      ? ""
+      : Core.sanitizeFolderPath(customFolder || "Flow Videos", "Flow Videos");
     resetState(quality === "720p" ? "720p export" : "1080p upscale", quality);
-    log(`Batch export started: quality=${quality}, target=${requestedFailures?.length ? `${requestedFailures.length} failed videos` : "all videos"}`);
+    const folderLabel = activeSubfolder ? `Downloads/${activeSubfolder}/` : "Downloads/";
+    log(`Batch export started: quality=${quality}, folder=${folderLabel}, target=${requestedFailures?.length ? `${requestedFailures.length} failed videos` : "all videos"}`);
 
     try {
       const completeInventory = await resolveVideoInventory(Boolean(requestedFailures?.length));
@@ -1501,6 +1909,15 @@
           }
         }
         videos = selected;
+      } else if (options.selectedMediaIds?.length) {
+        const idSet = new Set(options.selectedMediaIds);
+        videos = completeInventory.filter((video) => idSet.has(video.mediaId));
+        log(`Selection applied: ${videos.length}/${completeInventory.length} videos chosen from grid.`);
+        if (options.filter) {
+          const rawCount = videos.length;
+          videos = videos.filter((video, index) => Core.matchesFilter(video, index, options.filter));
+          log(`Filter applied on selection: "${options.filter}" (${videos.length}/${rawCount} matched).`);
+        }
       } else if (options.filter) {
         const rawCount = completeInventory.length;
         videos = completeInventory.filter((video, index) => Core.matchesFilter(video, index, options.filter));
@@ -1509,25 +1926,10 @@
       state.found = videos.length;
       log(`Inventory resolved: ${videos.length} videos queued for ${quality}.`);
 
-      let existingFilenames = [];
-      if (!requestedFailures?.length && options.skipDownloaded !== false) {
-        try {
-          const res = await chrome.runtime.sendMessage({ type: "FLOW_GET_DOWNLOAD_HISTORY" });
-          if (res?.ok && Array.isArray(res.filenames)) existingFilenames = res.filenames;
-        } catch {}
-      }
-
       if (quality === "720p" && !usesModernFlow()) {
         for (let index = 0; index < videos.length && !state.stopRequested; index += 1) {
           const video = videos[index];
           const videoTitle = video.title || video.mediaId || `Video ${index + 1}`;
-          if (options.skipDownloaded !== false && isAlreadyDownloaded(video, existingFilenames)) {
-            state.skipped += 1;
-            state.processed += 1;
-            log(`[#${index + 1}/${videos.length}] Skipping "${videoTitle}" (already downloaded).`);
-            updateTimingStats(videos.length);
-            continue;
-          }
           log(`[#${index + 1}/${videos.length}] Direct downloading "${videoTitle}"…`);
           state.message = `720p: downloading video ${index + 1}/${videos.length}…`;
           try {
@@ -1558,13 +1960,6 @@
         for (let index = 0; index < videos.length && !state.stopRequested; index += 1) {
           const video = videos[index];
           const videoTitle = video.title || video.mediaId || `Video ${index + 1}`;
-          if (options.skipDownloaded !== false && isAlreadyDownloaded(video, existingFilenames)) {
-            state.skipped += 1;
-            state.processed += 1;
-            log(`[#${index + 1}/${videos.length}] Skipping "${videoTitle}" (already downloaded).`);
-            updateTimingStats(videos.length);
-            continue;
-          }
           log(`[#${index + 1}/${videos.length}] Locating "${videoTitle}" in grid…`);
           state.message = `${quality}: locating video ${index + 1}/${videos.length}…`;
 
@@ -1601,13 +1996,6 @@
         const targetById = new Map(videos.map((video) => [video.mediaId, video]));
         const walkResult = await walkMediaGrid(targetById, async (card, matchIndex, video) => {
           const videoTitle = video?.title || video?.mediaId || `Video ${state.processed + 1}`;
-          if (options.skipDownloaded !== false && isAlreadyDownloaded(video, existingFilenames)) {
-            state.skipped += 1;
-            state.processed += 1;
-            log(`[#${state.processed}/${videos.length}] Skipping "${videoTitle}" (already downloaded).`);
-            updateTimingStats(videos.length);
-            return;
-          }
           log(`[#${state.processed + 1}/${videos.length}] Exporting "${videoTitle}"…`);
           state.message = `${quality}: processing video ${state.processed + 1}/${videos.length}…`;
           try {
@@ -1642,14 +2030,14 @@
 
       updateTimingStats(videos.length);
       if (state.stopRequested) {
-        state.message = `Stopped — ${state.success} downloaded, ${state.failed} failed${state.skipped ? `, ${state.skipped} skipped` : ""}`;
+        state.message = `Stopped — ${state.success} downloaded, ${state.failed} failed`;
       } else {
-        state.message = `Finished — ${state.success} downloaded, ${state.failed} failed${state.skipped ? `, ${state.skipped} skipped` : ""}`;
+        state.message = `Finished — ${state.success} downloaded, ${state.failed} failed`;
         if (options.soundNotifications !== false) {
           playCompletionChime(state.failed === 0);
           void notifyCompletion(
             "Flow Export Complete",
-            `${state.success} downloaded, ${state.failed} failed${state.skipped ? ` (${state.skipped} skipped)` : ""}.`,
+            `${state.success} downloaded, ${state.failed} failed.`,
           );
         }
       }
@@ -1687,10 +2075,10 @@
       if (!state.running) {
         void runBatch(message.quality, null, {
           filter: message.filter || "",
-          skipDownloaded: message.skipDownloaded !== false,
           organizeSubfolders: message.organizeSubfolders !== false,
           soundNotifications: message.soundNotifications !== false,
           customFolder: message.customFolder || "",
+          selectedMediaIds: Array.isArray(message.selectedMediaIds) ? message.selectedMediaIds : null,
         });
       }
       sendResponse({ ok: true, state: snapshotState() });
@@ -1713,12 +2101,30 @@
       });
       void runBatch(quality, uniqueFailures, {
         filter: "",
-        skipDownloaded: false,
         organizeSubfolders: message.organizeSubfolders !== false,
         soundNotifications: message.soundNotifications !== false,
         customFolder: message.customFolder || "",
       });
       sendResponse({ ok: true, retryCount: uniqueFailures.length });
+      return false;
+    }
+
+    if (message?.type === "FLOW_GET_SELECTION") {
+      sendResponse({
+        ok: true,
+        selectedCount: selectedMediaIds.size,
+        selectedMediaIds: [...selectedMediaIds],
+      });
+      return false;
+    }
+
+    if (message?.type === "FLOW_CLEAR_SELECTION") {
+      selectedMediaIds.clear();
+      lastSelectedMediaId = null;
+      tileSelectionAnchors = new WeakMap();
+      updateAllDecoratedButtons();
+      updateFloatingDock();
+      sendResponse({ ok: true });
       return false;
     }
 
@@ -1771,4 +2177,13 @@
       state.message = "Stopping after the current video…";
     }
   }, true);
+
+  if (typeof setInterval !== "undefined") {
+    if (usesModernFlow()) scheduleGridDecoration();
+    setInterval(() => {
+      if (usesModernFlow()) {
+        scheduleGridDecoration();
+      }
+    }, 800);
+  }
 })();

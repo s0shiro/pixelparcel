@@ -20,6 +20,19 @@
     return `flow-tile:${url.toString()}`;
   }
 
+  function explicitMediaId(tile, media) {
+    const attributes = ["data-media-id", "data-asset-id", "data-generation-id"];
+    const nodes = [tile, media, tile.querySelector("[data-media-id], [data-asset-id], [data-generation-id]")]
+      .filter(Boolean);
+    for (const node of nodes) {
+      for (const attribute of attributes) {
+        const value = node.getAttribute?.(attribute);
+        if (value) return `flow-media:${value}`;
+      }
+    }
+    return "";
+  }
+
   function videoCards(document, baseUrl, visible = () => true) {
     const cards = new Map();
     // These are the components served by Flow's Angular media-grid module.
@@ -30,10 +43,10 @@
       const thumbnail = media.querySelector("img.thumbnail, img");
       const video = media.querySelector("video");
       const source = thumbnail?.getAttribute("src") || thumbnail?.currentSrc || video?.poster || video?.src || video?.currentSrc;
-      const explicitId = media.querySelector("[data-media-id]")?.getAttribute("data-media-id");
+      const explicitId = explicitMediaId(tile, media);
       const ariaLabel = tile.getAttribute("aria-label");
       const thumbKey = thumbnailKey(source, baseUrl);
-      const mediaId = explicitId ? `flow-media:${explicitId}` : (thumbKey || (ariaLabel ? `flow-label:${ariaLabel}` : ""));
+      const mediaId = explicitId || thumbKey || (ariaLabel ? `flow-label:${ariaLabel}` : "");
       if (!mediaId || cards.has(mediaId)) continue;
       cards.set(mediaId, {
         mediaId,
