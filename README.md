@@ -16,7 +16,7 @@ The extension does not generate media, remove watermarks, bypass account restric
 5. Open a Google Flow project and reload the Flow tab once.
 6. Click the extension icon.
 
-After updating, click **Reload** for this extension in `chrome://extensions`, confirm version **1.7.6**, then refresh the Flow project tab. Both `flow.google.com` and the Flow routes on `labs.google`, including language-prefixed URLs, are recognized. Reloading only the popup does not update an already-injected content script.
+After updating, click **Reload** for this extension in `chrome://extensions`, confirm version **1.7.7**, then refresh the Flow project tab. Both `flow.google.com` and the Flow routes on `labs.google`, including language-prefixed URLs, are recognized. Reloading only the popup does not update an already-injected content script.
 
 If the popup reports that it cannot read the tab's address or connect to Flow, check the extension's **Details → Site access** and allow access to your Flow site. Select the project tab before clicking the extension icon. The popup only controls the selected tab; it never silently chooses another open project.
 
@@ -38,7 +38,7 @@ If an export fails, the popup keeps a **Failed videos** report containing the it
 
 On the older Labs interface, the scanner reads the project inventory through the extension's background worker, with grid scanning as a fallback. On the new Flow interface, it scans the virtualized video grid and uses each video's native download menu for both 720p and 1080p. It does not send the old Labs API requests from `flow.google.com`.
 
-Before scanning the new interface, open the project's **Videos** view and clear search/filter restrictions. Only completed video tiles in the current project/collection view are included; hidden nested collections and older versions inside an edit stack are not traversed. Scanning scrolls through the loaded view and restores the original position afterward. Keep the project tab in the foreground while exporting. The requested resolution must actually be available in Flow's menu—360p or 1080p originals are never silently renamed as 720p.
+Before scanning the new interface, open the project's **Videos** view and clear any search or filter applied inside Google Flow. The extension itself has no filter: it exports the checked videos, or every video when none are checked. Only completed video tiles in the current project/collection view are included; hidden nested collections and older versions inside an edit stack are not traversed. Scanning scrolls through the loaded view and restores the original position afterward. Keep the project tab in the foreground while exporting. The requested resolution must actually be available in Flow's menu—360p or 1080p originals are never silently renamed as 720p.
 
 Native downloads are counted after Chrome reports completion, not just when they start. Interrupted downloads are recorded for retry. Temporary download watches survive the extension service worker going idle. Only one native export job is monitored at a time; avoid manually downloading other media from Flow during a batch. Press **Stop** in the popup or `Esc` in the Flow tab to stop the extension; this does not cancel an upscale already running on Google's servers. Check Chrome Downloads before retrying a timed-out item to avoid duplicates.
 
