@@ -37,6 +37,8 @@
     let fetchRequests = 0;
     let wrongQuality = false;
     let unrelatedClicks = 0;
+    let playbackStarts = 0;
+    let unhandledRejections = 0;
     let activeToken = "";
     let retryStarted = false;
     const attempts = new Map();
@@ -54,7 +56,10 @@
     globalThis.fetch = async () => { fetchRequests += 1; throw new TypeError("Failed to fetch"); };
     globalThis.chrome = { runtime: {
       onMessage: { addListener: (listener) => listeners.push(listener) },
-      async sendMessage(message) {
+      sendMessage(message) {
+        if (message.type === "FLOW_CANCEL_DOWNLOAD_WATCH" && params.has("invalidatedCancel")) {
+          throw new Error("Extension context invalidated.");
+        }
         if (message.type === "FLOW_WATCH_DOWNLOAD") activeToken = message.token;
         if (["FLOW_FETCH_PROJECT", "FLOW_DOWNLOAD_MEDIA", "FLOW_CLASSIFY_MEDIA_IDS"].includes(message.type)) {
           legacyRequests += 1;
@@ -63,6 +68,10 @@
         return { ok: true };
       },
     } };
+    window.addEventListener("unhandledrejection", (event) => {
+      unhandledRejections += 1;
+      event.preventDefault();
+    });
 
     function closeMenus() { document.querySelectorAll('[role="menu"]').forEach((menu) => menu.remove()); }
     document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeMenus(); });
@@ -103,9 +112,13 @@
       const media = document.createElement(index === count ? "flow-image-tile" : "flow-video-tile");
       const image = document.createElement("img");
       image.className = "thumbnail";
-      image.src = `thumbnail-${index}.jpg`;
+      image.src = params.has("unstableIdentity") && index === 0
+        ? "thumbnail-0-initial.jpg"
+        : `thumbnail-${index}.jpg`;
       media.append(image);
       tile.append(media);
+      tile.addEventListener("pointerdown", () => { playbackStarts += 1; });
+      tile.addEventListener("click", () => { playbackStarts += 1; });
       tile.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         closeMenus();
@@ -138,8 +151,38 @@
   <script src="../modern-flow.js"></script>
   <script src="../content.js"></script>
   <script>
-    setTimeout(() => send(mode === "scan" ? { type: "FLOW_SCAN_PROJECT" } : { type: "FLOW_START_BATCH", quality }), 50);
+    if (mode === "selection" || mode === "selection-refresh") {
+      setTimeout(() => {
+        const button = document.querySelector(".flow-exporter-select-btn");
+        if (button) {
+          button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+          button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+          button.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+          button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+          button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        }
+        if (mode === "selection-refresh") {
+          card(0).querySelector("img").src = "thumbnail-0-loaded.jpg";
+        }
+        setTimeout(() => {
+          const selection = send({ type: "FLOW_GET_SELECTION" });
+          const result = document.querySelector("#result");
+          result.dataset.selectionCount = selection?.selectedCount || 0;
+          result.dataset.checkedCount = document.querySelectorAll(".flow-exporter-select-btn.selected").length;
+          result.dataset.playbackStarts = playbackStarts;
+          result.dataset.controlOutsideTile = String(Boolean(button && !button.closest("flow-grid-tile-container")));
+          result.dataset.legacyRequests = legacyRequests;
+          result.dataset.fetchRequests = fetchRequests;
+          result.dataset.wrongQuality = wrongQuality;
+          result.dataset.unrelatedClicks = unrelatedClicks;
+          result.textContent = JSON.stringify(selection);
+        }, mode === "selection-refresh" ? 1_000 : 0);
+      }, 1_200);
+    } else {
+      setTimeout(() => send(mode === "scan" ? { type: "FLOW_SCAN_PROJECT" } : { type: "FLOW_START_BATCH", quality }), 50);
+    }
     const poll = setInterval(() => {
+      if (mode === "selection" || mode === "selection-refresh") return;
       const state = send({ type: "FLOW_GET_STATUS" });
       if (state) document.querySelector("#result").textContent = JSON.stringify(state);
       if (!state || state.running) return;
@@ -158,6 +201,7 @@
       result.dataset.fetchRequests = fetchRequests;
       result.dataset.wrongQuality = wrongQuality;
       result.dataset.unrelatedClicks = unrelatedClicks;
+      result.dataset.unhandledRejections = unhandledRejections;
       result.dataset.lastError = state.lastError;
       result.dataset.retryCorrect = retryStarted && state.success === 1
         && attempts.get(failIndex) === 2

@@ -37,7 +37,10 @@ function worker({ fetch = async () => { throw new Error("Unexpected fetch"); }, 
       },
       tabs: { async sendMessage(tabId, message) { sent.push({ tabId, ...message }); } },
       downloads: {
-        async download() { return 10; },
+        async download(options) {
+          downloadCalls.push(options);
+          return 10;
+        },
         async search(query = {}) {
           let list = [...downloads.values()];
           if (query.id !== undefined) list = list.filter((d) => d.id === query.id);
@@ -50,9 +53,10 @@ function worker({ fetch = async () => { throw new Error("Unexpected fetch"); }, 
       },
     },
   });
+  const downloadCalls = [];
   vm.runInContext(source, context);
   return {
-    sent, downloads, storage, notifications, listeners,
+    sent, downloads, storage, notifications, listeners, downloadCalls,
     send(message, sender = modernSender) {
       return new Promise((resolve) => {
         const async = listeners.message(message, sender, resolve);
@@ -173,13 +177,39 @@ test("check download watch detects completed download via polling", async () => 
   assert.equal(w.sent[0].token, "poll-token");
 });
 
-test("returns completed download history for deduplication", async () => {
+test("a new watch never reuses the previous video's completed download", async () => {
   const w = worker();
-  w.downloads.set(1, { id: 1, state: "complete", filename: "/home/user/Downloads/EP01_Scene1.mp4" });
-  w.downloads.set(2, { id: 2, state: "interrupted", filename: "/home/user/Downloads/EP02_Failed.mp4" });
-  const result = await w.send({ type: "FLOW_GET_DOWNLOAD_HISTORY" });
-  assert.equal(result.ok, true);
-  assert.deepEqual(result.filenames, ["EP01_Scene1.mp4"]);
+  w.downloads.set(20, {
+    id: 20,
+    url: "blob:https://flow.google.com/previous-video",
+    mime: "video/mp4",
+    state: "complete",
+    startTime: new Date().toISOString(),
+    filename: "testing/previous-video.mp4",
+  });
+  await w.send({ type: "FLOW_WATCH_DOWNLOAD", token: "next-video", subfolder: "testing" });
+
+  const earlyCheck = await w.send({ type: "FLOW_CHECK_DOWNLOAD_WATCH", token: "next-video" });
+  assert.equal(earlyCheck.matched, false);
+  assert.equal(w.sent.length, 0);
+
+  await w.create({
+    id: 21,
+    url: "blob:https://flow.google.com/next-video",
+    mime: "video/mp4",
+    state: "complete",
+    startTime: new Date().toISOString(),
+    filename: "next-video.mp4",
+  });
+  assert.equal(w.sent[0].downloadId, 21);
+
+  let suggested = null;
+  w.listeners.determiningFilename(
+    { id: 21, url: "blob:https://flow.google.com/next-video", filename: "next-video.mp4" },
+    (result) => { suggested = result; },
+  );
+  await new Promise(setImmediate);
+  assert.equal(suggested.filename, "testing/next-video.mp4");
 });
 
 test("triggers desktop notification on completion", async () => {
@@ -195,7 +225,7 @@ test("triggers desktop notification on completion", async () => {
   assert.equal(w.notifications[0].message, "16 downloaded, 0 failed.");
 });
 
-test("routes downloads to Flow project subfolder when determining filename", async () => {
+test("routes downloads to the exact configured folder", async () => {
   const w = worker();
   await w.send({
     type: "FLOW_WATCH_DOWNLOAD",
@@ -209,17 +239,42 @@ test("routes downloads to Flow project subfolder when determining filename", asy
   );
   await new Promise(setImmediate);
   assert.ok(suggested);
-  assert.equal(suggested.filename, "Flow/Korean_Drama_EP02/Shot1.mp4");
+  assert.equal(suggested.filename, "Korean_Drama_EP02/Shot1.mp4");
   assert.equal(suggested.conflictAction, "uniquify");
 });
 
-test("routes downloads to custom subfolder path when isCustom is true", async () => {
+test("keeps the folder route when a fast download completes before filename selection", async () => {
+  const w = worker();
+  await w.send({
+    type: "FLOW_WATCH_DOWNLOAD",
+    token: "token-fast-folder",
+    subfolder: "testing",
+  });
+  await w.create({
+    id: 100,
+    url: "blob:https://flow.google.com/fast-video",
+    mime: "video/mp4",
+    state: "complete",
+    filename: "video-3.mp4",
+  });
+
+  assert.equal(w.sent[0].type, "FLOW_DOWNLOAD_DETECTED");
+  let suggested = null;
+  w.listeners.determiningFilename(
+    { id: 100, url: "blob:https://flow.google.com/fast-video", filename: "video-3.mp4" },
+    (result) => { suggested = result; },
+  );
+  await new Promise(setImmediate);
+  assert.ok(suggested);
+  assert.equal(suggested.filename, "testing/video-3.mp4");
+});
+
+test("keeps explicitly requested nested folder paths", async () => {
   const w = worker();
   await w.send({
     type: "FLOW_WATCH_DOWNLOAD",
     token: "token-custom",
     subfolder: "MyDrama/Episodes",
-    isCustom: true,
   });
   let suggested = null;
   w.listeners.determiningFilename(
@@ -230,4 +285,36 @@ test("routes downloads to custom subfolder path when isCustom is true", async ()
   assert.ok(suggested);
   assert.equal(suggested.filename, "MyDrama/Episodes/Shot2.mp4");
   assert.equal(suggested.conflictAction, "uniquify");
+});
+
+test("leaves native downloads directly in Downloads when no folder is configured", async () => {
+  const w = worker();
+  await w.send({ type: "FLOW_WATCH_DOWNLOAD", token: "token-no-folder", subfolder: "" });
+  let suggested = "not-called";
+  w.listeners.determiningFilename(
+    { id: 102, url: "blob:https://flow.google.com/test", filename: "Shot3.mp4" },
+    (result) => { suggested = result; },
+  );
+  await new Promise(setImmediate);
+  assert.equal(suggested, undefined);
+});
+
+test("direct downloads use the same exact folder rules as native downloads", async () => {
+  const inFolder = worker();
+  assert.equal((await inFolder.send({
+    type: "FLOW_DIRECT_DOWNLOAD",
+    url: "https://flow-content.google/video.mp4",
+    filename: "Shot4.mp4",
+    subfolder: "Flow Videos",
+  })).ok, true);
+  assert.equal(inFolder.downloadCalls[0].filename, "Flow Videos/Shot4.mp4");
+
+  const withoutFolder = worker();
+  assert.equal((await withoutFolder.send({
+    type: "FLOW_DIRECT_DOWNLOAD",
+    url: "https://flow-content.google/video.mp4",
+    filename: "Shot5.mp4",
+    subfolder: "",
+  })).ok, true);
+  assert.equal(withoutFolder.downloadCalls[0].filename, "Shot5.mp4");
 });

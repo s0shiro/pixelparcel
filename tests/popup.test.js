@@ -62,6 +62,9 @@ async function openPopup(tab, options = {}) {
         async sendMessage(tabId, message) {
           messages.push({ tabId, ...message });
           if (!model.connected) throw new Error("Receiving end does not exist.");
+          if (message?.type === "FLOW_GET_SELECTION" && model.selection) {
+            return { ok: true, selectedMediaIds: model.selection };
+          }
           return model.status || { running: false, found: 23, failures: [], mode: "Idle" };
         },
       },
@@ -221,6 +224,12 @@ test("manifest grants click access and injects on every supported Flow route", (
   assert.match(source("popup.html"), /<script src="core.js"><\/script>\s*<script src="popup.js"><\/script>/);
 });
 
+test("download-history skipping is absent from the extension", () => {
+  for (const filename of ["popup.html", "popup.js", "content.js", "background.js"]) {
+    assert.doesNotMatch(source(filename), /skipDownloaded|FLOW_GET_DOWNLOAD_HISTORY|opt-skip|skipped-count/);
+  }
+});
+
 test("popup displays live timing statistics and passes options in batch requests", async () => {
   const popup = await openPopup(
     { id: 42, url: "https://flow.google.com/project/example" },
@@ -233,7 +242,6 @@ test("popup displays live timing statistics and passes options in batch requests
         processed: 2,
         success: 2,
         failed: 0,
-        skipped: 1,
         elapsed: "01:15",
         eta: "04:30",
         speed: "35s/item",
@@ -245,13 +253,13 @@ test("popup displays live timing statistics and passes options in batch requests
   assert.equal(popup.get("#elapsed-time").textContent, "01:15");
   assert.equal(popup.get("#eta-time").textContent, "04:30");
   assert.equal(popup.get("#speed-stat").textContent, "35s/item");
-  assert.equal(popup.get("#skipped-count").textContent, 1);
 
   // Set filter and custom folder
   popup.get("#filter-input").value = "EP02";
   popup.get("#custom-folder-input").value = "Drama/Season1";
   await popup.get("#custom-folder-input").listeners.input();
   assert.equal(popup.model.storage?.customFolder, "Drama/Season1");
+  assert.equal(popup.get("#folder-preview").textContent, "Location: Downloads/Drama/Season1/");
 
   await popup.get("#download-1080-button").listeners.click();
 
@@ -260,7 +268,6 @@ test("popup displays live timing statistics and passes options in batch requests
   assert.equal(batchMsg.quality, "1080p");
   assert.equal(batchMsg.filter, "EP02");
   assert.equal(batchMsg.customFolder, "Drama/Season1");
-  assert.equal(batchMsg.skipDownloaded, true);
   assert.equal(batchMsg.organizeSubfolders, true);
   assert.equal(batchMsg.soundNotifications, true);
 
@@ -268,4 +275,52 @@ test("popup displays live timing statistics and passes options in batch requests
   await popup.get("#custom-folder-reset").listeners.click();
   assert.equal(popup.get("#custom-folder-input").value, "");
   assert.equal(popup.model.storage?.customFolder, "");
+  assert.equal(popup.get("#folder-preview").textContent, "Location: Downloads/Flow Videos/");
+});
+
+test("folder controls show the exact destination and support direct Downloads", async () => {
+  const popup = await openPopup(
+    { id: 42, url: "https://flow.google.com/project/example" },
+    { storage: { organizeSubfolders: false, customFolder: "Old/Nested/Folder" } },
+  );
+
+  assert.equal(popup.get("#custom-folder-input").disabled, true);
+  assert.equal(popup.get("#custom-folder-reset").disabled, true);
+  assert.equal(popup.get("#folder-preview").textContent, "Location: Downloads/ (no export folder)");
+
+  popup.get("#opt-subfolders").checked = true;
+  await popup.get("#opt-subfolders").listeners.change();
+  assert.equal(popup.get("#custom-folder-input").disabled, false);
+  assert.equal(popup.get("#folder-preview").textContent, "Location: Downloads/Old/Nested/Folder/");
+});
+
+test("popup synchronizes in-page selection and passes selectedMediaIds in batch", async () => {
+  const popup = await openPopup(
+    { id: 42, url: "https://flow.google.com/project/example" },
+    {
+      selection: ["media-1", "media-2"],
+      status: {
+        running: false,
+        mode: "Idle",
+        found: 10,
+        failures: [],
+      },
+    },
+  );
+
+  await popup.refresh();
+
+  assert.equal(popup.get("#selection-notice").hidden, false);
+  assert.equal(popup.get("#selection-text").textContent, "2 videos selected in grid");
+
+  await popup.get("#download-720-button").listeners.click();
+  const batchMsg = popup.messages.find((m) => m.type === "FLOW_START_BATCH" && m.quality === "720p");
+  assert.ok(batchMsg);
+  assert.deepEqual(batchMsg.selectedMediaIds, ["media-1", "media-2"]);
+
+  // Clear selection
+  await popup.get("#selection-clear-btn").listeners.click();
+  const clearMsg = popup.messages.find((m) => m.type === "FLOW_CLEAR_SELECTION");
+  assert.ok(clearMsg);
+  assert.equal(popup.get("#selection-notice").hidden, true);
 });

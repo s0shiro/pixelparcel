@@ -68,3 +68,20 @@ test("modern scan respects visibility predicate and aria-label keys", () => {
   assert.equal(cards[0].mediaId, "flow-label:video_01.mp4");
   assert.equal(cards[1].mediaId, "flow-label:video_03.mp4");
 });
+
+test("modern scan prefers stable media attributes over changing thumbnails", () => {
+  const media = { querySelector: () => null, getAttribute: () => null };
+  const tile = {
+    querySelector(selector) {
+      if (selector === "flow-video-tile") return media;
+      return null;
+    },
+    getAttribute(attribute) {
+      if (attribute === "data-media-id") return "stable-video-id";
+      if (attribute === "aria-label") return "A video";
+      return null;
+    },
+  };
+  const cards = Modern.videoCards({ querySelectorAll: () => [tile] }, "https://flow.google.com");
+  assert.equal(cards[0].mediaId, "flow-media:stable-video-id");
+});
