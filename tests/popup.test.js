@@ -207,6 +207,9 @@ test("copies diagnostic logs to clipboard with failure details and activity logs
 test("manifest grants click access and injects on every supported Flow route", () => {
   assert.ok(manifest.permissions.includes("activeTab"));
   assert.ok(manifest.permissions.includes("notifications"));
+  assert.ok(manifest.permissions.includes("sidePanel"));
+  assert.equal(manifest.side_panel?.default_path, "popup.html");
+  assert.equal(manifest.action?.default_popup, undefined);
   assert.ok(manifest.host_permissions.includes("https://flow.google.com/*"));
   const matches = manifest.content_scripts.flatMap((script) => script.matches);
   for (const url of [

@@ -14,11 +14,15 @@ function worker({ fetch = async () => { throw new Error("Unexpected fetch"); }, 
   const listeners = {};
   const sent = [];
   const notifications = [];
+  const sidePanelBehaviors = [];
   const downloads = new Map();
   const context = vm.createContext({
     URL, AbortSignal, fetch,
     chrome: {
       runtime: { id: "exporter", onMessage: { addListener: (fn) => { listeners.message = fn; } } },
+      sidePanel: {
+        async setPanelBehavior(behavior) { sidePanelBehaviors.push(behavior); },
+      },
       storage: {
         session: {
           async get(key) { return { [key]: structuredClone(storage[key]) }; },
@@ -56,7 +60,7 @@ function worker({ fetch = async () => { throw new Error("Unexpected fetch"); }, 
   const downloadCalls = [];
   vm.runInContext(source, context);
   return {
-    sent, downloads, storage, notifications, listeners, downloadCalls,
+    sent, downloads, storage, notifications, sidePanelBehaviors, listeners, downloadCalls,
     send(message, sender = modernSender) {
       return new Promise((resolve) => {
         const async = listeners.message(message, sender, resolve);
@@ -71,6 +75,13 @@ function worker({ fetch = async () => { throw new Error("Unexpected fetch"); }, 
     },
   };
 }
+
+test("toolbar clicks are configured to open the persistent side panel", async () => {
+  const w = worker();
+  await new Promise(setImmediate);
+  assert.equal(w.sidePanelBehaviors.length, 1);
+  assert.equal(w.sidePanelBehaviors[0].openPanelOnActionClick, true);
+});
 
 test("legacy inventory fetch runs in the worker with credentials and a fixed endpoint", async () => {
   let request;
