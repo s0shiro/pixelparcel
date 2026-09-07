@@ -15,9 +15,6 @@ const controls = {
   lastError: document.querySelector("#last-error"),
   failureReport: document.querySelector("#failure-report"),
   failureList: document.querySelector("#failure-list"),
-  filterInput: document.querySelector("#filter-input"),
-  filterClear: document.querySelector("#filter-clear"),
-  filterStatus: document.querySelector("#filter-status"),
   scan: document.querySelector("#scan-button"),
   download720: document.querySelector("#download-720-button"),
   download1080: document.querySelector("#download-1080-button"),
@@ -37,7 +34,6 @@ const controls = {
 let flowTab = null;
 let refreshing = false;
 let lastState = null;
-let knownVideos = [];
 let inPageSelection = [];
 
 async function getFlowTab() {
@@ -55,43 +51,6 @@ async function send(message) {
   return chrome.tabs.sendMessage(flowTab.id, message);
 }
 
-function updateFilterUI() {
-  const query = controls.filterInput?.value?.trim() || "";
-  if (controls.filterClear) {
-    controls.filterClear.hidden = !query;
-  }
-
-  if (!query) {
-    if (controls.filterStatus) {
-      controls.filterStatus.hidden = true;
-      controls.filterStatus.textContent = "";
-    }
-    if (controls.download720) controls.download720.textContent = "Download all 720p";
-    if (controls.download1080) controls.download1080.textContent = "Upscale + download all 1080p";
-    return;
-  }
-
-  const Core = globalThis.FlowBulkCore;
-  let matchCount = null;
-  if (knownVideos.length > 0 && Core?.matchesFilter) {
-    const matched = knownVideos.filter((v, i) => Core.matchesFilter(v, i, query));
-    matchCount = matched.length;
-    if (controls.filterStatus) {
-      controls.filterStatus.textContent = `${matchCount} of ${knownVideos.length} videos match filter`;
-      controls.filterStatus.hidden = false;
-    }
-  } else {
-    if (controls.filterStatus) {
-      controls.filterStatus.textContent = `Filter active: "${query}"`;
-      controls.filterStatus.hidden = false;
-    }
-  }
-
-  const countLabel = matchCount !== null ? `${matchCount} filtered` : "filtered";
-  if (controls.download720) controls.download720.textContent = `Download ${countLabel} 720p`;
-  if (controls.download1080) controls.download1080.textContent = `Upscale + download ${countLabel} 1080p`;
-}
-
 function updateSelectionUI() {
   const count = inPageSelection.length;
   if (controls.selectionNotice) {
@@ -104,7 +63,8 @@ function updateSelectionUI() {
     if (controls.download720) controls.download720.textContent = `Download ${count} selected 720p`;
     if (controls.download1080) controls.download1080.textContent = `Upscale + download ${count} selected 1080p`;
   } else {
-    updateFilterUI();
+    if (controls.download720) controls.download720.textContent = "Download all 720p";
+    if (controls.download1080) controls.download1080.textContent = "Upscale + download all 1080p";
   }
 }
 
@@ -182,14 +142,6 @@ async function refresh() {
     controls.pageStatus.classList.remove("error");
 
     if (flowTab?.id) {
-      if (knownVideos.length === 0) {
-        void send({ type: "FLOW_GET_INVENTORY" }).then((res) => {
-          if (res?.ok && Array.isArray(res.videos) && res.videos.length > 0) {
-            knownVideos = res.videos;
-            updateFilterUI();
-          }
-        }).catch(() => undefined);
-      }
       void send({ type: "FLOW_GET_SELECTION" }).then((res) => {
         if (res?.ok && Array.isArray(res.selectedMediaIds)) {
           inPageSelection = res.selectedMediaIds;
@@ -221,7 +173,6 @@ async function issue(message) {
 
 function getBatchOptions() {
   return {
-    filter: controls.filterInput?.value?.trim() || "",
     organizeSubfolders: controls.optSubfolders?.checked !== false,
     soundNotifications: controls.optNotifications?.checked !== false,
     customFolder: controls.customFolderInput?.value?.trim() || "",
@@ -244,12 +195,6 @@ controls.retry.addEventListener("click", () => {
 });
 
 controls.stop.addEventListener("click", () => issue({ type: "FLOW_STOP_BATCH" }));
-
-controls.filterInput?.addEventListener?.("input", updateFilterUI);
-controls.filterClear?.addEventListener?.("click", () => {
-  if (controls.filterInput) controls.filterInput.value = "";
-  updateFilterUI();
-});
 
 controls.selectionClearBtn?.addEventListener?.("click", () => {
   inPageSelection = [];

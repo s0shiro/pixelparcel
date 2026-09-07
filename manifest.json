@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Flow Bulk Video Exporter",
-  "version": "1.7.6",
+  "version": "1.7.7",
   "description": "Bulk-download Google Flow videos at 720p or use Flow's own 1080p upscale export.",
   "permissions": [
     "activeTab",

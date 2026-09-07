@@ -1913,15 +1913,6 @@
         const idSet = new Set(options.selectedMediaIds);
         videos = completeInventory.filter((video) => idSet.has(video.mediaId));
         log(`Selection applied: ${videos.length}/${completeInventory.length} videos chosen from grid.`);
-        if (options.filter) {
-          const rawCount = videos.length;
-          videos = videos.filter((video, index) => Core.matchesFilter(video, index, options.filter));
-          log(`Filter applied on selection: "${options.filter}" (${videos.length}/${rawCount} matched).`);
-        }
-      } else if (options.filter) {
-        const rawCount = completeInventory.length;
-        videos = completeInventory.filter((video, index) => Core.matchesFilter(video, index, options.filter));
-        log(`Filter applied: "${options.filter}" (${videos.length}/${rawCount} matched).`);
       }
       state.found = videos.length;
       log(`Inventory resolved: ${videos.length} videos queued for ${quality}.`);
@@ -2074,7 +2065,6 @@
       }
       if (!state.running) {
         void runBatch(message.quality, null, {
-          filter: message.filter || "",
           organizeSubfolders: message.organizeSubfolders !== false,
           soundNotifications: message.soundNotifications !== false,
           customFolder: message.customFolder || "",
@@ -2100,7 +2090,6 @@
         return failures.findIndex((candidate) => candidate.mediaId === failure.mediaId) === index;
       });
       void runBatch(quality, uniqueFailures, {
-        filter: "",
         organizeSubfolders: message.organizeSubfolders !== false,
         soundNotifications: message.soundNotifications !== false,
         customFolder: message.customFolder || "",
@@ -2125,17 +2114,6 @@
       updateAllDecoratedButtons();
       updateFloatingDock();
       sendResponse({ ok: true });
-      return false;
-    }
-
-    if (message?.type === "FLOW_GET_INVENTORY") {
-      const inventory = modernInventoryCache?.videos || inventoryCache || [];
-      const videos = inventory.map((v, i) => ({
-        index: i + 1,
-        title: v.title || v.mediaId || `Video ${i + 1}`,
-        mediaId: v.mediaId,
-      }));
-      sendResponse({ ok: true, videos });
       return false;
     }
 

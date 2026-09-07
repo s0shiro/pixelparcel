@@ -123,35 +123,6 @@
     return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
 
-  function parseIndexRanges(filterStr, maxCount = Infinity) {
-    const trimmed = compactText(filterStr);
-    if (!trimmed || !/^[\d\s,-]+$/.test(trimmed)) return null;
-    const indices = new Set();
-    const parts = trimmed.split(/[\s,]+/).filter(Boolean);
-    for (const part of parts) {
-      const match = part.match(/^(\d+)(?:-(\d+))?$/);
-      if (!match) return null;
-      const start = Number(match[1]);
-      const end = match[2] !== undefined ? Number(match[2]) : start;
-      if (start < 1 || end < start) continue;
-      const cap = Math.min(end, maxCount);
-      for (let i = start; i <= cap; i += 1) {
-        indices.add(i);
-      }
-    }
-    return indices.size > 0 ? indices : null;
-  }
-
-  function matchesFilter(item, index, filterStr) {
-    const trimmed = compactText(filterStr);
-    if (!trimmed) return true;
-    const ranges = parseIndexRanges(trimmed);
-    if (ranges) return ranges.has(index + 1);
-    const query = trimmed.toLowerCase();
-    const title = compactText(item?.title || item?.mediaId || "").toLowerCase();
-    return title.includes(query);
-  }
-
   function isFlowPage(url) {
     try {
       const parsed = new URL(url);
@@ -170,9 +141,7 @@
     formatDuration,
     isDisabledElement,
     isFlowPage,
-    matchesFilter,
     normalizeResolutionId,
-    parseIndexRanges,
     safeFilename,
     sanitizeFolder,
     sanitizeFolderPath,
