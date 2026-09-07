@@ -1,4 +1,4 @@
-# Flow Bulk Video Exporter
+# PixelParcel for Google Flow™
 
 A small Manifest V3 Chrome extension with only two export jobs:
 
@@ -12,7 +12,7 @@ The extension does not generate media, remove watermarks, bypass account restric
 1. Open `chrome://extensions` in Chrome.
 2. Turn on **Developer mode**.
 3. Click **Load unpacked**.
-4. Select this `flow-bulk-video-exporter` directory.
+4. Select this `pixelparcel` directory.
 5. Open a Google Flow project and reload the Flow tab once.
 6. Click the extension icon.
 
