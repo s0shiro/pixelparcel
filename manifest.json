@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PixelParcel for Google Flow™",
-  "version": "1.8.0",
+  "version": "1.9.3",
   "description": "Bulk-download Google Flow videos at 720p or use Flow's own 1080p upscale export.",
   "permissions": [
     "activeTab",
