@@ -104,6 +104,7 @@ test("detects Flow on both hosts and sends actions only to the selected tab", as
   ]) {
     const popup = await openPopup({ id: 42, url });
     assert.equal(popup.get("#page-status").textContent, "Current Flow project detected", url);
+    assert.equal(popup.get("#page-status").classList.contains("checking"), false, url);
     assert.equal(popup.get("#scan-button").disabled, false, url);
     assert.equal(popup.get("#found-count").textContent, 23);
     await popup.get("#scan-button").listeners.click();
@@ -256,6 +257,7 @@ test("popup displays live timing statistics and passes folder options in batch r
   assert.equal(popup.get("#elapsed-time").textContent, "01:15");
   assert.equal(popup.get("#eta-time").textContent, "04:30");
   assert.equal(popup.get("#speed-stat").textContent, "35s/item");
+  assert.equal(popup.get("#job-card").classList.contains("running"), true);
 
   // Set custom folder
   popup.get("#custom-folder-input").value = "Drama/Season1";
@@ -324,4 +326,19 @@ test("popup synchronizes in-page selection and passes selectedMediaIds in batch"
   const clearMsg = popup.messages.find((m) => m.type === "FLOW_CLEAR_SELECTION");
   assert.ok(clearMsg);
   assert.equal(popup.get("#selection-notice").hidden, true);
+});
+
+test("redesigned panel preserves hidden states and accessible export hierarchy", () => {
+  const html = source("popup.html");
+  const css = source("popup.css");
+  assert.match(html, /class="brand-mark"/);
+  assert.match(html, /class="export-section" aria-labelledby="export-heading"/);
+  assert.ok(html.indexOf('id="download-1080-button"') < html.indexOf('id="download-720-button"'));
+  assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important;/);
+  assert.match(css, /\*,\s*\*::before,\s*\*::after\s*\{[^}]*border-radius:\s*0\s*!important;/s);
+  assert.doesNotMatch(css, /(?:linear|radial|conic)-gradient\(/);
+  assert.doesNotMatch(css, /--(?:blue|green|amber|red):/);
+  assert.match(css, /\.danger\s*\{[^}]*background:\s*var\(--danger\)/s);
+  assert.match(css, /\.success-stat strong\s*\{[^}]*color:\s*var\(--success\)/s);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
 });
