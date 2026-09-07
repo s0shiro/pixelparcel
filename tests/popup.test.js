@@ -224,13 +224,13 @@ test("manifest grants click access and injects on every supported Flow route", (
   assert.match(source("popup.html"), /<script src="core.js"><\/script>\s*<script src="popup.js"><\/script>/);
 });
 
-test("download-history skipping is absent from the extension", () => {
+test("download-history skipping and popup filtering are absent from the extension", () => {
   for (const filename of ["popup.html", "popup.js", "content.js", "background.js"]) {
-    assert.doesNotMatch(source(filename), /skipDownloaded|FLOW_GET_DOWNLOAD_HISTORY|opt-skip|skipped-count/);
+    assert.doesNotMatch(source(filename), /skipDownloaded|FLOW_GET_DOWNLOAD_HISTORY|opt-skip|skipped-count|filter-input|matchesFilter|message\.filter/);
   }
 });
 
-test("popup displays live timing statistics and passes options in batch requests", async () => {
+test("popup displays live timing statistics and passes folder options in batch requests", async () => {
   const popup = await openPopup(
     { id: 42, url: "https://flow.google.com/project/example" },
     {
@@ -254,8 +254,7 @@ test("popup displays live timing statistics and passes options in batch requests
   assert.equal(popup.get("#eta-time").textContent, "04:30");
   assert.equal(popup.get("#speed-stat").textContent, "35s/item");
 
-  // Set filter and custom folder
-  popup.get("#filter-input").value = "EP02";
+  // Set custom folder
   popup.get("#custom-folder-input").value = "Drama/Season1";
   await popup.get("#custom-folder-input").listeners.input();
   assert.equal(popup.model.storage?.customFolder, "Drama/Season1");
@@ -266,7 +265,6 @@ test("popup displays live timing statistics and passes options in batch requests
   const batchMsg = popup.messages.find((m) => m.type === "FLOW_START_BATCH");
   assert.ok(batchMsg);
   assert.equal(batchMsg.quality, "1080p");
-  assert.equal(batchMsg.filter, "EP02");
   assert.equal(batchMsg.customFolder, "Drama/Season1");
   assert.equal(batchMsg.organizeSubfolders, true);
   assert.equal(batchMsg.soundNotifications, true);

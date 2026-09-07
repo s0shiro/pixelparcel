@@ -79,19 +79,3 @@ test("formats elapsed and ETA durations cleanly", () => {
   assert.equal(formatDuration(-1), "--:--");
   assert.equal(formatDuration(NaN), "--:--");
 });
-
-test("parses index ranges and matches filters", () => {
-  const { parseIndexRanges, matchesFilter } = require("../core.js");
-  const ranges = parseIndexRanges("1-3, 5, 8-10");
-  assert.deepEqual([...ranges].sort((a, b) => a - b), [1, 2, 3, 5, 8, 9, 10]);
-  assert.equal(parseIndexRanges("EP02"), null);
-
-  // Range matching (1-based index)
-  assert.equal(matchesFilter({ title: "Shot A" }, 0, "1-3"), true); // index 0 is #1
-  assert.equal(matchesFilter({ title: "Shot B" }, 3, "1-3"), false); // index 3 is #4
-
-  // Text matching
-  assert.equal(matchesFilter({ title: "EP02_Scene1.mp4" }, 0, "ep02"), true);
-  assert.equal(matchesFilter({ title: "EP01_Scene1.mp4" }, 0, "ep02"), false);
-  assert.equal(matchesFilter({ title: "Shot A" }, 0, ""), true);
-});
