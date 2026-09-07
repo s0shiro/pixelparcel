@@ -1,9 +1,12 @@
 "use strict";
 
 const activeWatches = new Map();
+const recentDownloadRoutes = new Map();
 const mediaTypeCache = new Map();
 const WATCH_MAX_AGE_MS = 12 * 60 * 1000;
+const DOWNLOAD_ROUTE_MAX_AGE_MS = 5 * 60 * 1000;
 const WATCH_STORAGE_KEY = "flowDownloadWatches";
+const DOWNLOAD_ROUTE_STORAGE_KEY = "flowDownloadRoutes";
 let watchesLoaded = false;
 let watchQueue = Promise.resolve();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -26,11 +29,18 @@ function withWatches(action) {
     if (!watchesLoaded) {
       const saved = await chrome.storage.session.get(WATCH_STORAGE_KEY);
       for (const [tabId, watch] of saved[WATCH_STORAGE_KEY] || []) activeWatches.set(tabId, watch);
+      const savedRoutes = await chrome.storage.session.get(DOWNLOAD_ROUTE_STORAGE_KEY);
+      for (const [downloadId, route] of savedRoutes[DOWNLOAD_ROUTE_STORAGE_KEY] || []) {
+        recentDownloadRoutes.set(downloadId, route);
+      }
       watchesLoaded = true;
     }
     expireOldWatches();
     const result = await action();
-    await chrome.storage.session.set({ [WATCH_STORAGE_KEY]: [...activeWatches] });
+    await chrome.storage.session.set({
+      [WATCH_STORAGE_KEY]: [...activeWatches],
+      [DOWNLOAD_ROUTE_STORAGE_KEY]: [...recentDownloadRoutes],
+    });
     return result;
   });
   watchQueue = task.catch(() => undefined);
@@ -122,6 +132,17 @@ function expireOldWatches() {
   for (const [tabId, watch] of activeWatches) {
     if (now - watch.startedAt > WATCH_MAX_AGE_MS) activeWatches.delete(tabId);
   }
+  for (const [downloadId, route] of recentDownloadRoutes) {
+    if (now - route.rememberedAt > DOWNLOAD_ROUTE_MAX_AGE_MS) recentDownloadRoutes.delete(downloadId);
+  }
+}
+
+function rememberDownloadRoute(watch, downloadId) {
+  if (!Number.isInteger(downloadId)) return;
+  recentDownloadRoutes.set(downloadId, {
+    subfolder: watch.subfolder || "",
+    rememberedAt: Date.now(),
+  });
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -156,17 +177,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "FLOW_WATCH_DOWNLOAD") {
     const tabId = sender.tab?.id;
-    return respond(withWatches(() => {
+    return respond(withWatches(async () => {
       if ([...activeWatches.keys()].some((id) => id !== tabId)) {
         throw new Error("An export is already being monitored in another Flow tab. Finish or stop that job first.");
       }
+      const existingDownloads = await chrome.downloads.search({
+        limit: 100,
+        orderBy: ["-startTime"],
+      }).catch(() => []);
       activeWatches.set(tabId, {
         token: message.token,
         origin,
         startedAt: Date.now(),
-        projectTitle: message.projectTitle || "",
         subfolder: message.subfolder || "",
-        isCustom: Boolean(message.isCustom),
+        baselineDownloadIds: existingDownloads.map((item) => item.id).filter(Number.isInteger),
       });
       return { ok: true };
     }));
@@ -192,47 +216,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       for (const item of recent) {
         if (item.byExtensionId) continue;
+        if (watch.downloadId !== undefined && item.id !== watch.downloadId) continue;
+        if (watch.downloadId === undefined && watch.baselineDownloadIds?.includes(item.id)) continue;
         const itemTime = new Date(item.startTime || 0).getTime();
-        if (itemTime < watch.startedAt - 2000) continue;
+        if (itemTime && itemTime < watch.startedAt - 250) continue;
         const sameOrigin = flowOrigin(item.url) === watch.origin || flowOrigin(item.referrer) === watch.origin
           || (flowOrigin(item.url) === "google" && looksLikeVideoDownload(item));
         if (!sameOrigin) continue;
         if (item.mime && !/^video\//i.test(item.mime) && item.mime !== "application/octet-stream") continue;
         if (!item.url?.startsWith("blob:") && !looksLikeVideoDownload(item)) continue;
 
-        if (item.state === "complete" || item.state === "interrupted") {
+        if (watch.downloadId === undefined) {
           watch.downloadId = item.id;
-          await finishWatchedDownload(tabId, watch, item);
-          return { ok: true, matched: true, state: item.state };
+          rememberDownloadRoute(watch, item.id);
         }
+        if (item.state === "complete" || item.state === "interrupted") {
+          await finishWatchedDownload(tabId, watch, item);
+        }
+        return { ok: true, matched: true, state: item.state };
       }
       return { ok: true, matched: false };
     }));
-  }
-
-  if (message?.type === "FLOW_GET_DOWNLOAD_HISTORY") {
-    return respond((async () => {
-      const items = await chrome.downloads.search({
-        state: "complete",
-        limit: 1500,
-        orderBy: ["-startTime"],
-      });
-      const filenames = items.map((item) => (item.filename || "").replace(/^.*[\\/]/, ""));
-      return { ok: true, filenames };
-    })());
   }
 
   if (message?.type === "FLOW_NOTIFY_COMPLETION") {
     const title = message.title || "Flow Bulk Video Exporter";
     const text = message.message || "Export complete.";
     if (chrome.notifications?.create) {
+      const iconUrl = chrome.runtime?.getURL ? chrome.runtime.getURL("icons/icon-128.png") : "icons/icon-128.png";
       chrome.notifications.create({
         type: "basic",
-        iconUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAA0SURBVHhe7cExAQAAAMKg9U9tDQ8gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHwaNtcAAU2Lq3AAAAAASUVORK5CYII=",
+        iconUrl,
         title,
         message: text,
         priority: 2,
       }, (notifId) => {
+        if (chrome.runtime?.lastError) {
+          sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+          return;
+        }
         sendResponse({ ok: true, notifId });
       });
       return true;
@@ -244,10 +266,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "FLOW_DIRECT_DOWNLOAD") {
     let targetFilename = message.filename;
     if (message.subfolder) {
-      const sub = message.isCustom
-        ? message.subfolder
-        : (message.subfolder.includes("/") ? message.subfolder : `Flow/${message.subfolder}`);
-      targetFilename = `${sub}/${message.filename}`;
+      targetFilename = `${message.subfolder}/${message.filename}`;
     }
     const options = {
       url: message.url,
@@ -268,10 +287,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     let targetFilename = message.filename;
     if (message.subfolder) {
-      const sub = message.isCustom
-        ? message.subfolder
-        : (message.subfolder.includes("/") ? message.subfolder : `Flow/${message.subfolder}`);
-      targetFilename = `${sub}/${message.filename}`;
+      targetFilename = `${message.subfolder}/${message.filename}`;
     }
     chrome.downloads.download({
       url: mediaDownloadUrl(message.mediaId),
@@ -299,6 +315,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function finishWatchedDownload(tabId, watch, item) {
   if (item.state !== "complete" && item.state !== "interrupted") return;
+  rememberDownloadRoute(watch, item.id);
   activeWatches.delete(tabId);
   await chrome.tabs.sendMessage(tabId, {
     type: item.state === "complete" ? "FLOW_DOWNLOAD_DETECTED" : "FLOW_DOWNLOAD_FAILED",
@@ -322,6 +339,7 @@ chrome.downloads.onCreated.addListener((item) => {
         && item.mime !== "application/octet-stream")) continue;
       if (!item.url?.startsWith("blob:") && !looksLikeVideoDownload(item)) continue;
       watch.downloadId = item.id;
+      rememberDownloadRoute(watch, item.id);
       const [latest] = await chrome.downloads.search({ id: item.id });
       await finishWatchedDownload(tabId, watch, latest || item);
       break;
@@ -345,6 +363,7 @@ chrome.downloads.onChanged.addListener((delta) => {
         if (item.mime && !/^video\//i.test(item.mime) && item.mime !== "application/octet-stream") continue;
         if (!item.url?.startsWith("blob:") && !looksLikeVideoDownload(item)) continue;
         watch.downloadId = item.id;
+        rememberDownloadRoute(watch, item.id);
       }
       await finishWatchedDownload(tabId, watch, item || {
         id: delta.id, state: delta.state.current, error: delta.error?.current,
@@ -358,32 +377,25 @@ if (chrome.downloads?.onDeterminingFilename?.addListener) {
   chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
     void withWatches(async () => {
       try {
-        let organize = true;
-        if (chrome.storage?.local?.get) {
-          const settings = await chrome.storage.local.get(["organizeSubfolders"]).catch(() => ({}));
-          if (settings && settings.organizeSubfolders === false) organize = false;
-        }
-        if (!organize) {
-          suggest();
-          return;
-        }
-
         let folder = "";
-        let isCustom = false;
-        for (const [, watch] of activeWatches) {
-          if (watch.downloadId === item.id || flowOrigin(item.url) === watch.origin || flowOrigin(item.referrer) === watch.origin
-            || (flowOrigin(item.url) === "google" && looksLikeVideoDownload(item))) {
-            folder = watch.subfolder || watch.projectTitle || "";
-            isCustom = Boolean(watch.isCustom);
-            break;
+        let matchedWatch = false;
+        const rememberedRoute = recentDownloadRoutes.get(item.id);
+        if (rememberedRoute) {
+          matchedWatch = true;
+          folder = rememberedRoute.subfolder || "";
+          recentDownloadRoutes.delete(item.id);
+        } else {
+          for (const [, watch] of activeWatches) {
+            if (watch.downloadId === item.id || flowOrigin(item.url) === watch.origin || flowOrigin(item.referrer) === watch.origin
+              || (flowOrigin(item.url) === "google" && looksLikeVideoDownload(item))) {
+              matchedWatch = true;
+              folder = watch.subfolder || "";
+              break;
+            }
           }
         }
 
-        if (!folder && (flowOrigin(item.url) === "https://labs.google" || flowOrigin(item.url) === "https://flow.google.com" || looksLikeVideoDownload(item))) {
-          folder = "Flow_Export";
-        }
-
-        if (!folder) {
+        if (!matchedWatch || !folder) {
           suggest();
           return;
         }
@@ -397,10 +409,7 @@ if (chrome.downloads?.onDeterminingFilename?.addListener) {
           suggest();
           return;
         }
-        const targetPath = isCustom
-          ? `${cleanFolder}/${rawName}`
-          : (cleanFolder.includes("/") ? `${cleanFolder}/${rawName}` : `Flow/${cleanFolder}/${rawName}`);
-        suggest({ filename: targetPath, conflictAction: "uniquify" });
+        suggest({ filename: `${cleanFolder}/${rawName}`, conflictAction: "uniquify" });
       } catch {
         suggest();
       }
