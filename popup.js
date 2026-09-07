@@ -266,7 +266,7 @@ function formatLogs(state) {
   const timestamp = new Date().toISOString();
   const localTime = new Date().toLocaleString();
   const lines = [
-    "=== FLOW BULK VIDEO EXPORTER LOGS ===",
+    "=== PIXELPARCEL DIAGNOSTIC LOGS ===",
     `Generated at: ${timestamp} (${localTime})`,
   ];
 

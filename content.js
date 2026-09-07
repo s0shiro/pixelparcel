@@ -325,7 +325,7 @@
     selectionLayer = document.createElement("div");
     selectionLayer.id = "flow-exporter-selection-layer";
     selectionLayer.className = "flow-exporter-selection-layer";
-    selectionLayer.setAttribute("aria-label", "Flow Bulk Video Exporter selection controls");
+    selectionLayer.setAttribute("aria-label", "PixelParcel selection controls");
     document.body.append(selectionLayer);
     selectionButtons.clear();
     return selectionLayer;

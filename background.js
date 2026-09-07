@@ -251,7 +251,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "FLOW_NOTIFY_COMPLETION") {
-    const title = message.title || "Flow Bulk Video Exporter";
+    const title = message.title || "PixelParcel";
     const text = message.message || "Export complete.";
     if (chrome.notifications?.create) {
       const iconUrl = chrome.runtime?.getURL ? chrome.runtime.getURL("icons/icon-128.png") : "icons/icon-128.png";

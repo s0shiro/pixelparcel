@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Flow Bulk Video Exporter",
+  "name": "PixelParcel for Google Flow™",
   "version": "1.8.0",
   "description": "Bulk-download Google Flow videos at 720p or use Flow's own 1080p upscale export.",
   "permissions": [
@@ -26,7 +26,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Open Flow Bulk Video Exporter",
+    "default_title": "Open PixelParcel",
     "default_icon": {
       "16": "icons/icon-16.png",
       "48": "icons/icon-48.png",
