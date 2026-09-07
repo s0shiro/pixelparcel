@@ -197,7 +197,7 @@ test("copies diagnostic logs to clipboard with failure details and activity logs
   assert.ok(copyButton.classList.contains("copied"));
 
   const copied = popup.getClipboard();
-  assert.ok(copied.includes("=== FLOW BULK VIDEO EXPORTER LOGS ==="));
+  assert.ok(copied.includes("=== PIXELPARCEL DIAGNOSTIC LOGS ==="));
   assert.ok(copied.includes("30 found | 21 downloaded | 2 failed"));
   assert.ok(copied.includes("#9 — 12_02-RH-12-BUNG_SH-02_V2_POV_WALKIN.mp4: Flow menu timed out"));
   assert.ok(copied.includes("#10 — 18_01-RH-09-BUNG_SH-02_V3_TRUCK_LEFT.mp4: 1080p is not available"));
