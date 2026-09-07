@@ -16,7 +16,7 @@ The extension does not generate media, remove watermarks, bypass account restric
 5. Open a Google Flow project and reload the Flow tab once.
 6. Click the extension icon.
 
-After updating, click **Reload** for this extension in `chrome://extensions`, confirm version **1.8.0**, then refresh the Flow project tab. Both `flow.google.com` and the Flow routes on `labs.google`, including language-prefixed URLs, are recognized. Reloading only the panel does not update an already-injected content script.
+After updating, click **Reload** for this extension in `chrome://extensions`, confirm version **1.9.3**, then refresh the Flow project tab. Both `flow.google.com` and the Flow routes on `labs.google`, including language-prefixed URLs, are recognized. Reloading only the panel does not update an already-injected content script.
 
 Clicking the extension icon opens a persistent Chrome side panel instead of a small popup. The panel stays open beside Flow and can be resized by dragging its inner edge.
 
