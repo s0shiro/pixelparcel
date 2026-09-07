@@ -28,7 +28,6 @@
         <div class="counts">
           <span><strong id="found-count">0</strong> found</span>
           <span><strong id="success-count">0</strong> downloaded</span>
-          <span id="skipped-wrapper" hidden><strong id="skipped-count">0</strong> skipped</span>
           <span><strong id="failed-count">0</strong> failed</span>
         </div>
         <p id="last-error" class="last-error" hidden></p>
@@ -46,6 +45,11 @@
         <div id="filter-status" class="filter-status" hidden></div>
       </div>
 
+      <div id="selection-notice" class="selection-notice" hidden>
+        <span id="selection-text">0 videos selected in grid</span>
+        <button id="selection-clear-btn" type="button" class="selection-clear-btn" title="Clear in-page selection">Clear</button>
+      </div>
+
       <div class="actions">
         <button id="scan-button" class="secondary" type="button">Scan project</button>
         <button id="download-720-button" class="primary" type="button">Download all 720p</button>
@@ -58,22 +62,19 @@
       <details id="options-details" class="options-details">
         <summary class="options-summary">Export settings &amp; preferences</summary>
         <div class="options-content">
-          <div class="custom-folder-row">
-            <label for="custom-folder-input" class="folder-input-label">Save folder in Downloads:</label>
-            <div class="folder-input-group">
-              <input type="text" id="custom-folder-input" class="folder-input" placeholder="e.g. Flow/EP02 or Drama" autocomplete="off" spellcheck="false">
-              <button type="button" id="custom-folder-reset" class="reset-folder-btn" title="Reset to auto project folder">Default</button>
-            </div>
-            <span class="folder-hint">Leave blank to use <code>Flow/&lt;Project&gt;/</code></span>
-          </div>
           <label class="option-label">
             <input type="checkbox" id="opt-subfolders" checked>
-            <span>Organize into subfolders inside Downloads</span>
+            <span>Save every exported video in one folder</span>
           </label>
-          <label class="option-label">
-            <input type="checkbox" id="opt-skip" checked>
-            <span>Skip already downloaded videos</span>
-          </label>
+          <div class="custom-folder-row">
+            <label for="custom-folder-input" class="folder-input-label">Folder inside Downloads</label>
+            <div class="folder-input-group">
+              <input type="text" id="custom-folder-input" class="folder-input" placeholder="Flow Videos" autocomplete="off" spellcheck="false">
+              <button type="button" id="custom-folder-reset" class="reset-folder-btn" title="Reset to the Flow Videos folder">Reset</button>
+            </div>
+            <strong id="folder-preview" class="folder-preview">Location: Downloads/Flow Videos/</strong>
+            <span class="folder-hint">Leave blank for one <code>Flow Videos</code> folder. Add <code>/</code> only when you intentionally want nested folders.</span>
+          </div>
           <label class="option-label">
             <input type="checkbox" id="opt-notifications" checked>
             <span>Desktop notification &amp; completion chime</span>
