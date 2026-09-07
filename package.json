@@ -1,6 +1,6 @@
 {
   "name": "flow-bulk-video-exporter",
-  "version": "1.7.7",
+  "version": "1.8.0",
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.js",

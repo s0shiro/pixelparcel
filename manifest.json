@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Flow Bulk Video Exporter",
-  "version": "1.7.7",
+  "version": "1.8.0",
   "description": "Bulk-download Google Flow videos at 720p or use Flow's own 1080p upscale export.",
   "permissions": [
     "activeTab",
     "downloads",
     "storage",
-    "notifications"
+    "notifications",
+    "sidePanel"
   ],
   "host_permissions": [
     "https://flow.google.com/*",
@@ -25,13 +26,15 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_popup": "popup.html",
-    "default_title": "Flow Bulk Video Exporter",
+    "default_title": "Open Flow Bulk Video Exporter",
     "default_icon": {
       "16": "icons/icon-16.png",
       "48": "icons/icon-48.png",
       "128": "icons/icon-128.png"
     }
+  },
+  "side_panel": {
+    "default_path": "popup.html"
   },
   "content_scripts": [
     {

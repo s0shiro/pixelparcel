@@ -1,5 +1,16 @@
 "use strict";
 
+function enableActionSidePanel() {
+  try {
+    const request = chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true });
+    void Promise.resolve(request).catch(() => undefined);
+  } catch {}
+}
+
+enableActionSidePanel();
+chrome.runtime.onInstalled?.addListener(enableActionSidePanel);
+chrome.runtime.onStartup?.addListener(enableActionSidePanel);
+
 const activeWatches = new Map();
 const recentDownloadRoutes = new Map();
 const mediaTypeCache = new Map();
