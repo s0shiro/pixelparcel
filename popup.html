@@ -7,28 +7,41 @@
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
-    <main>
-      <div class="eyebrow">FOR GOOGLE FLOW</div>
-      <h1>PixelParcel</h1>
-      <p id="page-status" class="page-status">Checking the current tab…</p>
+    <main class="app-shell">
+      <header class="app-header">
+        <div class="brand-row">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <div class="brand-copy">
+            <div class="eyebrow">VIDEO EXPORT COMPANION</div>
+            <h1>PixelParcel</h1>
+            <p class="tagline">Bulk exports, neatly delivered.</p>
+          </div>
+        </div>
+        <p id="page-status" class="page-status checking">Checking the current Flow tab…</p>
+      </header>
 
-      <section id="job-card" class="job-card" aria-live="polite">
+      <section id="job-card" class="job-card idle" aria-live="polite">
         <div class="job-row">
-          <span id="job-message">Ready</span>
+          <div class="job-copy">
+            <span class="status-light" aria-hidden="true"></span>
+            <span id="job-message">Ready to export</span>
+          </div>
           <span id="job-mode" class="mode">Idle</span>
         </div>
-        <div class="progress-track" aria-hidden="true">
+        <div id="progress-track" class="progress-track" role="progressbar" aria-label="Batch export progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
           <div id="progress-bar" class="progress-bar"></div>
         </div>
         <div id="timing-row" class="timing-row">
-          <span>Elapsed: <strong id="elapsed-time">00:00</strong></span>
-          <span>Speed: <strong id="speed-stat">--</strong></span>
-          <span>ETA: <strong id="eta-time">--:--</strong></span>
+          <span><small>Elapsed</small><strong id="elapsed-time">00:00</strong></span>
+          <span><small>Speed</small><strong id="speed-stat">--</strong></span>
+          <span><small>Remaining</small><strong id="eta-time">--:--</strong></span>
         </div>
         <div class="counts">
-          <span><strong id="found-count">0</strong> found</span>
-          <span><strong id="success-count">0</strong> downloaded</span>
-          <span><strong id="failed-count">0</strong> failed</span>
+          <span class="count-stat found-stat"><strong id="found-count">0</strong><small>Found</small></span>
+          <span class="count-stat success-stat"><strong id="success-count">0</strong><small>Downloaded</small></span>
+          <span class="count-stat failed-stat"><strong id="failed-count">0</strong><small>Failed</small></span>
         </div>
         <p id="last-error" class="last-error" hidden></p>
         <div id="failure-report" class="failure-report" hidden>
@@ -38,25 +51,40 @@
       </section>
 
       <div id="selection-notice" class="selection-notice" hidden>
-        <span id="selection-text">0 videos selected in grid</span>
+        <span class="selection-copy"><span class="selection-icon" aria-hidden="true">✓</span><span id="selection-text">0 videos selected in grid</span></span>
         <button id="selection-clear-btn" type="button" class="selection-clear-btn" title="Clear in-page selection">Clear</button>
       </div>
 
-      <div class="actions">
-        <button id="scan-button" class="secondary" type="button">Scan project</button>
-        <button id="download-720-button" class="primary" type="button">Download all 720p</button>
-        <button id="download-1080-button" class="primary upscale" type="button">Upscale + download all 1080p</button>
-        <button id="retry-button" class="secondary retry" type="button" disabled>Retry failed videos</button>
-        <button id="stop-button" class="danger" type="button" disabled>Stop</button>
-        <button id="copy-logs-button" class="secondary copy-logs" type="button">Copy logs</button>
-      </div>
+      <section class="export-section" aria-labelledby="export-heading">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">EXPORT</span>
+            <h2 id="export-heading">Choose output quality</h2>
+          </div>
+          <span class="section-hint">Uses Flow’s native export</span>
+        </div>
+        <div class="actions">
+          <button id="download-1080-button" class="primary upscale" type="button">Upscale + download all 1080p</button>
+          <button id="download-720-button" class="primary download" type="button">Download all 720p</button>
+          <button id="scan-button" class="secondary scan" type="button">Scan project</button>
+          <button id="retry-button" class="secondary retry" type="button" disabled>Retry failed videos</button>
+          <button id="stop-button" class="danger" type="button" disabled>Stop</button>
+          <button id="copy-logs-button" class="secondary copy-logs" type="button">Copy logs</button>
+        </div>
+      </section>
 
       <details id="options-details" class="options-details">
-        <summary class="options-summary">Export settings &amp; preferences</summary>
+        <summary class="options-summary">
+          <span class="summary-copy">
+            <span class="summary-title">Export settings</span>
+            <span class="summary-subtitle">Folder and notifications</span>
+          </span>
+          <span class="summary-chevron" aria-hidden="true"></span>
+        </summary>
         <div class="options-content">
           <label class="option-label">
             <input type="checkbox" id="opt-subfolders" checked>
-            <span>Save every exported video in one folder</span>
+            <span class="option-copy"><strong>Organize in one folder</strong><small>Keep this batch together inside Downloads</small></span>
           </label>
           <div class="custom-folder-row">
             <label for="custom-folder-input" class="folder-input-label">Folder inside Downloads</label>
@@ -69,14 +97,15 @@
           </div>
           <label class="option-label">
             <input type="checkbox" id="opt-notifications" checked>
-            <span>Desktop notification &amp; completion chime</span>
+            <span class="option-copy"><strong>Notify when finished</strong><small>Play a chime and show a desktop notification</small></span>
           </label>
         </div>
       </details>
 
-      <p class="footnote">
-        Keep the Flow project tab open. 1080p uses Flow’s own upscale option and requires an eligible account.
-      </p>
+      <aside class="footnote">
+        <span class="footnote-icon" aria-hidden="true">i</span>
+        <span>Keep the Flow project tab open. 1080p uses Flow’s own upscale option and requires an eligible account.</span>
+      </aside>
     </main>
     <script src="core.js"></script>
     <script src="popup.js"></script>

@@ -2,8 +2,10 @@
 
 const controls = {
   pageStatus: document.querySelector("#page-status"),
+  jobCard: document.querySelector("#job-card"),
   jobMessage: document.querySelector("#job-message"),
   jobMode: document.querySelector("#job-mode"),
+  progressTrack: document.querySelector("#progress-track"),
   progressBar: document.querySelector("#progress-bar"),
   timingRow: document.querySelector("#timing-row"),
   elapsedTime: document.querySelector("#elapsed-time"),
@@ -78,12 +80,19 @@ function render(state) {
   const denominator = Math.max(found, processed, 1);
   const progress = running ? Math.min(98, (processed / denominator) * 100) : (processed ? 100 : 0);
 
-  controls.jobMessage.textContent = state?.message || "Ready";
+  controls.jobMessage.textContent = state?.message || "Ready to export";
   controls.jobMode.textContent = state?.mode || "Idle";
   controls.progressBar.style.width = `${progress}%`;
+  controls.progressTrack?.setAttribute?.("aria-valuenow", String(Math.round(progress)));
   controls.found.textContent = found;
   controls.success.textContent = success;
   controls.failed.textContent = failed;
+
+  if (controls.jobCard) {
+    controls.jobCard.classList.remove("idle", "running", "complete", "attention");
+    const visualState = running ? "running" : failed > 0 ? "attention" : success > 0 ? "complete" : "idle";
+    controls.jobCard.classList.add(visualState);
+  }
 
   if (controls.elapsedTime) controls.elapsedTime.textContent = state?.elapsed || "00:00";
   if (controls.speedStat) controls.speedStat.textContent = state?.speed || "--";
@@ -115,9 +124,11 @@ function render(state) {
   controls.download720.disabled = running || !flowTab;
   controls.download1080.disabled = running || !flowTab;
   controls.retry.disabled = running || failures.length === 0 || !flowTab;
-  controls.retry.textContent = failures.length <= 1
+  controls.retry.textContent = failures.length === 1
     ? "Retry 1 failed video"
-    : `Retry ${failures.length} failed videos`;
+    : failures.length > 1
+      ? `Retry ${failures.length} failed videos`
+      : "Retry failed videos";
   controls.stop.disabled = !running || !flowTab;
 
   updateSelectionUI();
@@ -139,7 +150,7 @@ async function refresh() {
       throw new Error("Flow detected, but the extension is not connected. Allow site access and reload the Flow tab, then reopen this extension.");
     }
     controls.pageStatus.textContent = "Current Flow project detected";
-    controls.pageStatus.classList.remove("error");
+    controls.pageStatus.classList.remove("checking", "error");
 
     if (flowTab?.id) {
       void send({ type: "FLOW_GET_SELECTION" }).then((res) => {
@@ -154,6 +165,7 @@ async function refresh() {
   } catch (error) {
     flowTab = null;
     controls.pageStatus.textContent = error.message;
+    controls.pageStatus.classList.remove("checking");
     controls.pageStatus.classList.add("error");
     render(null);
   } finally {
@@ -167,6 +179,7 @@ async function issue(message) {
     await refresh();
   } catch (error) {
     controls.pageStatus.textContent = error.message;
+    controls.pageStatus.classList.remove("checking");
     controls.pageStatus.classList.add("error");
   }
 }
